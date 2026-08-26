@@ -78,6 +78,35 @@ Chạy scheduler dự đoán mỗi lần đóng nến (cửa sổ terminal riên
 uv run cryptopred-serve schedule
 ```
 
+## Chạy dài ngày
+
+Nhấp đúp `run.bat` — mở 2 cửa sổ (scheduler + dashboard) và bật trình duyệt.
+Đóng cửa sổ nào là dừng phần đó.
+
+Xem kết quả bất cứ lúc nào: nhấp đúp `status.bat`, hoặc
+
+```bash
+uv run cryptopred-serve status
+```
+
+**Vài ngày cho biết gì, và không cho biết gì.** Chiến lược chỉ ra tín hiệu ở
+~8% số nến — khoảng **2 tín hiệu/ngày** — và mỗi tín hiệu cần 24 giờ mới chấm
+được. Nên:
+
+| Sau | Tín hiệu được chấm | Nói lên điều gì |
+|---|---|---|
+| 3 ngày | ~6 | Đường ống chạy đúng. Không nói gì về edge. |
+| 1 tuần | ~14 | Vẫn không phân biệt được với may rủi. |
+| ~7 tuần | ~100 | Bắt đầu có ý nghĩa thống kê. |
+
+`status` in khoảng tin cậy 95% cạnh mọi tỉ lệ, và **dán nhãn "NOT YET
+MEANINGFUL"** khi mẫu còn nhỏ — cụ thể để không ai (kể cả bạn) nhìn "67% đúng"
+trên 6 lệnh mà tưởng là kết quả.
+
+Trong vài ngày đầu, thứ đáng kiểm là **hạ tầng**, không phải lợi nhuận:
+dự đoán có được ghi mỗi giờ không, tín hiệu có nổ đúng tần suất không, lệnh limit
+có khớp ~63% không, việc chấm điểm có chạy không.
+
 ## Kiểm thử
 
 ```bash

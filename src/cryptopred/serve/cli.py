@@ -39,6 +39,23 @@ def cycle(
 
 
 @app.command()
+def status(
+    interval: str = typer.Option("1h", help="Bar interval to report on."),
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+) -> None:
+    """What has actually happened since the scheduler started running.
+
+    Reads only the prediction log, whose rows were written before their outcomes
+    existed. Sample size is reported before every rate, because a hit rate over
+    a handful of signals is noise wearing a percentage sign.
+    """
+    from cryptopred.serve.status import collect, format_status
+
+    cfg = load_config(config)
+    typer.echo(format_status(collect(cfg, interval=interval)))
+
+
+@app.command()
 def schedule(
     interval: str = typer.Option("1h", help="Bar interval to schedule."),
     minute: int = typer.Option(
