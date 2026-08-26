@@ -80,6 +80,49 @@ def test_backfill_paginates_until_end():
     assert client.calls >= 4  # 10 bars at 3 per page
 
 
+def test_backfill_flushes_in_chunks():
+    """Long downloads must not hold every page in memory: the sink is called
+    repeatedly so partial progress survives an interruption."""
+    interval_ms = 3_600_000
+    start = pd.Timestamp("2024-01-01", tz="UTC")
+    client = FakeClient(int(start.timestamp() * 1000), n_bars=20, interval_ms=interval_ms, limit=3)
+
+    flushed = []
+    total = backfill_klines(
+        client,
+        "BTCUSDT",
+        "1h",
+        start=start,
+        end=start + pd.Timedelta(hours=20),
+        now=start + pd.Timedelta(hours=20),
+        sink=flushed.append,
+        flush_every=2,
+    )
+
+    assert total == 20
+    assert len(flushed) >= 3  # 7 pages of 3 bars, flushed every 2 pages
+    combined = pd.concat(flushed)
+    assert len(combined) == 20
+    assert not combined.index.has_duplicates
+
+
+def test_backfill_returns_frame_when_no_sink_given():
+    interval_ms = 3_600_000
+    start = pd.Timestamp("2024-01-01", tz="UTC")
+    client = FakeClient(int(start.timestamp() * 1000), n_bars=6, interval_ms=interval_ms, limit=3)
+
+    df = backfill_klines(
+        client,
+        "BTCUSDT",
+        "1h",
+        start=start,
+        end=start + pd.Timedelta(hours=6),
+        now=start + pd.Timedelta(hours=6),
+    )
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == 6
+
+
 def test_backfill_stops_when_page_empty():
     interval_ms = 3_600_000
     start = pd.Timestamp("2024-01-01", tz="UTC")

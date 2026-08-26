@@ -37,14 +37,24 @@ def run_klines_ingest(
                 continue
 
             typer.echo(f"Downloading {symbol} {interval} from {start} ...")
-            df = backfill_klines(client, symbol, interval, start=start, end=now, now=now)
-            if df.empty:
+
+            def flush(batch: pd.DataFrame, _symbol=symbol, _interval=interval) -> None:
+                """Persist each batch as it arrives so an interrupted run resumes
+                from where it stopped instead of starting over."""
+                store.append("klines", _symbol, _interval, batch)
+                typer.echo(
+                    f"  +{len(batch)} bars up to {batch.index.max()}", err=False
+                )
+
+            written = backfill_klines(
+                client, symbol, interval, start=start, end=now, now=now, sink=flush
+            )
+            if not written:
                 typer.echo(f"  no new bars for {symbol} {interval}")
                 continue
 
-            store.append("klines", symbol, interval, df)
-            total += len(df)
-            typer.echo(f"  wrote {len(df)} bars ({df.index.min()} -> {df.index.max()})")
+            total += written
+            typer.echo(f"  wrote {written} bars")
 
             stored = store.read("klines", symbol, interval)
             gaps = find_gaps(stored, interval)

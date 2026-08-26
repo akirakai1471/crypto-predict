@@ -46,3 +46,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer.Option() in an argument default is the framework's documented idiom
+"src/cryptopred/*/cli.py" = ["B008"]
