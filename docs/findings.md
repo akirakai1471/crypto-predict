@@ -359,6 +359,44 @@ hour of drift. And the paper trader currently places market orders at the bar
 close, so none of this is live yet: adopting maker execution is an
 implementation change to the trading path, not a config switch.
 
+## The paper trader now places the orders it was measuring
+
+Backtesting maker execution is one thing; running it is another, and the gap
+between them is where a strategy quietly stops being the one that was tested.
+The paper trader posts real resting orders now, and two details had to be right.
+
+**The limit is quoted from the signal bar's close, not the next bar's open.** A
+backtest can use the open of the bar an order works in; a live trader cannot,
+because that bar has not started when the order is sent. Binance klines are
+continuous — `open[t+1]` equals `close[t]` exactly — so the two references
+produce identical results here, which was verified rather than assumed. On a
+market with gaps they would not.
+
+**A resting order is not a position.** It sits in its own state until price
+reaches it, and the dashboard shows it separately. Collapsing the two would
+overstate what the strategy is holding at any moment.
+
+The two implementations agree where it matters. Over the same 4,217 signals, the
+backtest engine and the paper trader both report a **63.0% resting fill rate** —
+independently computed, to the decimal. On the paper path, switching from market
+to limit orders moves final equity from 15,493 to **16,419 USDT**, the win rate
+from 54.90% to 55.89%, and short-side profit from +793 to +914 USDT, while the
+directional verdict stays TWO-SIDED.
+
+Two bugs surfaced while building it, both worth recording.
+
+`paper_trades` was keyed on `(symbol, interval, entry_time)`. That works while
+every order fills instantly, and breaks the moment orders rest: a filled limit's
+`entry_time` moves onto the bar the next pending order already occupies, and the
+insert fails. The key is now `signal_time`, which is what actually identifies an
+order — one per signal. Existing databases are rebuilt in place.
+
+The dashboard's freshness indicator measured a bar's age from its **open**, so
+every hourly bar looked an hour staler than it was and the light sat red on a
+healthy feed. It also took the worst age across all intervals, including the 1m
+store that the scheduler deliberately does not sync. Both are fixed: age is
+measured from the close, and only the traded interval is judged.
+
 ## Decision
 
 Defaults stay at the 24-hour horizon and a 0.60 threshold. That is now the only

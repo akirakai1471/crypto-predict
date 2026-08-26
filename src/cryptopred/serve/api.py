@@ -29,7 +29,12 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
     parquet = ParquetStore(cfg.data.root / "raw")
     predictions = PredictionStore(cfg.data.root / "predictions.db")
-    trader = PaperTrader(cfg=cfg, store=predictions, parquet=parquet)
+    trader = PaperTrader(
+        cfg=cfg,
+        store=predictions,
+        parquet=parquet,
+        execution=cfg.strategy.execution_model(),
+    )
     predictors: dict[tuple[str, str], Predictor] = {}
 
     def get_predictor(symbol: str, interval: str) -> Predictor:
@@ -51,13 +56,22 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                     status.append({"symbol": symbol, "interval": interval, "bars": 0})
                     continue
                 last = bars.index.max()
-                age = (pd.Timestamp.now(tz="UTC") - last).total_seconds() / 60
+                # Age from the bar's CLOSE, not its open. Measuring from the open
+                # makes every hourly bar look an hour staler than it is, which
+                # turns a healthy feed into a permanent red light.
+                last_close = (
+                    bars["close_time"].max()
+                    if "close_time" in bars.columns
+                    else last
+                )
+                age = (pd.Timestamp.now(tz="UTC") - last_close).total_seconds() / 60
                 status.append(
                     {
                         "symbol": symbol,
                         "interval": interval,
                         "bars": int(len(bars)),
                         "last_bar": last.isoformat(),
+                        "last_close": last_close.isoformat(),
                         "minutes_behind": round(age, 1),
                     }
                 )
@@ -139,10 +153,23 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
     @app.get("/api/paper/positions")
     def paper_positions(symbol: str = "BTCUSDT") -> dict[str, Any]:
+        closed = predictions.closed_trades(symbol, limit=5_000)
+        rested = 0
+        if not closed.empty and "entry_was_maker" in closed.columns:
+            rested = int(closed["entry_was_maker"].fillna(0).sum())
         return {
+            # A resting limit is not a position yet, and showing it as one would
+            # overstate what the strategy is actually holding.
+            "pending": predictions.pending_orders(symbol).to_dict(orient="records"),
             "open": predictions.open_trades(symbol).to_dict(orient="records"),
-            "closed": predictions.closed_trades(symbol, limit=200).to_dict(orient="records"),
+            "closed": closed.head(200).to_dict(orient="records"),
             "summary": trader.summary(symbol),
+            "execution": {
+                "style": cfg.strategy.execution.style,
+                "n_closed": int(len(closed)),
+                "n_rested": rested,
+                "rested_share": (rested / len(closed)) if len(closed) else None,
+            },
         }
 
     @app.get("/api/config")
@@ -154,6 +181,10 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             "signal_threshold": cfg.strategy.signal_threshold,
             "taker_fee": cfg.strategy.taker_fee,
             "slippage": cfg.strategy.slippage,
+            "execution_style": cfg.strategy.execution.style,
+            "maker_fee": cfg.strategy.execution.maker_fee,
+            "limit_offset": cfg.strategy.execution.limit_offset,
+            "unfilled": cfg.strategy.execution.unfilled,
         }
 
     @app.get("/")

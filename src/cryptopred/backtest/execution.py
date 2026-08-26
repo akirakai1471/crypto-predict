@@ -49,6 +49,13 @@ class ExecutionModel:
     # this is the honest stress test for a maker strategy, because it attacks the
     # assumption the backtest cannot verify from OHLC data.
     fill_buffer: float = 0.0
+    # Which price the limit is quoted from. "entry_open" uses the open of the
+    # bar the order works in, which a backtest knows but a live trader does not:
+    # at the moment of posting, that bar has not started. "signal_close" uses
+    # the last price actually observable when the order is sent. Crypto trades
+    # continuously so the two are close, but only one of them is reproducible
+    # live, and the paper trader uses that one.
+    limit_reference: str = "entry_open"
 
     def taker_cost(self) -> float:
         return self.taker_fee + self.slippage
@@ -78,17 +85,22 @@ def maker_entry_fill(
     close: float,
     direction: int,
     model: ExecutionModel,
+    reference_price: float | None = None,
 ) -> Fill:
     """Try to enter with a limit posted inside the market.
 
-    Long posts below the open and fills only if the bar trades down to it.
+    Long posts below the reference and fills only if the bar trades down to it.
     Short posts above and fills only if the bar trades up to it.
+
+    `reference_price` overrides the bar open, so a caller can quote the limit
+    from the last price it could actually see when sending the order.
     """
+    reference = open_price if reference_price is None else reference_price
     if direction == LONG:
-        limit_price = open_price * (1 - model.limit_offset)
+        limit_price = reference * (1 - model.limit_offset)
         hit = low <= limit_price * (1 - model.fill_buffer)
     else:
-        limit_price = open_price * (1 + model.limit_offset)
+        limit_price = reference * (1 + model.limit_offset)
         hit = high >= limit_price * (1 + model.fill_buffer)
 
     if hit:
@@ -136,11 +148,19 @@ def entry_fill(
     close: float,
     direction: int,
     model: ExecutionModel,
+    signal_close: float | None = None,
 ) -> Fill:
     if model.style == "taker":
         return taker_fill(open_price, direction, model)
     if model.style == "maker":
-        return maker_entry_fill(open_price, high, low, close, direction, model)
+        reference = (
+            signal_close
+            if model.limit_reference == "signal_close" and signal_close is not None
+            else None
+        )
+        return maker_entry_fill(
+            open_price, high, low, close, direction, model, reference_price=reference
+        )
     raise ValueError(f"Unknown execution style: {model.style!r}")
 
 

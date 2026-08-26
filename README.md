@@ -145,6 +145,28 @@ Bẫy phải tránh: model phụ dùng chung cho cả 2 chiều sẽ học "shor
 mẫu dữ liệu thị trường tăng), làm chiến lược lệch hẳn một chiều. Phải train
 **riêng từng chiều** — mặc định đã bật.
 
+## Paper trader đặt lệnh limit thật
+
+Scheduler giờ đặt **lệnh limit chờ khớp**, không phải lệnh market. Mỗi chu kỳ:
+
+1. Tín hiệu → đặt limit cách giá 0.20%, **báo giá từ giá đóng nến** (giá duy nhất
+   live nhìn thấy được lúc gửi lệnh; backtest có thể dùng giá mở nến sau nhưng
+   live thì không).
+2. Nến kế → giá xuyên qua mức limit thì khớp; không thì **đuổi bằng lệnh market**.
+3. Lệnh chờ hiện trên dashboard ở mục riêng — **chưa phải vị thế**.
+
+Bật/tắt trong `config/default.yaml` mục `strategy.execution`.
+
+**Hai bản cài đặt độc lập cho cùng kết quả** — backtest engine và paper trader
+đều ra tỉ lệ khớp **63.0%**. Trên đường paper, maker so với market:
+
+| | Market | Maker |
+|---|---|---|
+| Vốn cuối | 15.493 | **16.419** |
+| Win rate | 54.90% | **55.89%** |
+| Short PnL | +793 | **+914** |
+| Verdict | TWO-SIDED | TWO-SIDED |
+
 ## Lệnh limit (maker): thay đổi đầu tiên sống sót qua bài test của chính nó
 
 ```bash

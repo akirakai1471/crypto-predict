@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from cryptopred.backtest.execution import ExecutionModel
 from cryptopred.config import Config
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.serve.store import PredictionStore
@@ -23,6 +24,10 @@ class PaperTrader:
     cfg: Config
     store: PredictionStore
     parquet: ParquetStore
+    # None means market orders, matching the original behaviour. A maker model
+    # posts limits that may never fill — see cryptopred.backtest.execution for
+    # why the missed fills matter more than the cheaper fee does.
+    execution: ExecutionModel | None = None
 
     @property
     def _side_cost(self) -> float:
@@ -60,6 +65,125 @@ class PaperTrader:
             model_version=model_version,
         )
 
+    # --- maker execution -------------------------------------------------
+
+    def post_limit(
+        self,
+        symbol: str,
+        interval: str,
+        signal: int,
+        signal_time: pd.Timestamp,
+        signal_close: float,
+        model_version: str,
+        horizon: int,
+    ) -> bool:
+        """Queue a limit order instead of buying at market.
+
+        The limit is quoted from the last close, which is the newest price
+        available when the order is sent. Quoting it from the next bar's open —
+        as a backtest can — would be using a price that does not exist yet.
+        """
+        if signal == 0 or self.execution is None:
+            return False
+        offset = self.execution.limit_offset
+        limit_price = signal_close * (1 - offset) if signal > 0 else signal_close * (1 + offset)
+        return self.store.post_limit_order(
+            symbol=symbol,
+            interval=interval,
+            direction=signal,
+            signal_time=signal_time,
+            limit_price=limit_price,
+            size_usd=self.position_size(symbol, interval, horizon),
+            model_version=model_version,
+        )
+
+    def resolve_pending(
+        self, symbol: str, interval: str
+    ) -> dict[str, int]:
+        """Decide what happened to each resting order on the bar after it was sent.
+
+        Filled at the limit, chased at the bar's close, or cancelled — the three
+        outcomes a real maker faces. An order whose bar has not closed yet is
+        left alone.
+        """
+        counts = {"filled": 0, "chased": 0, "cancelled": 0, "waiting": 0}
+        if self.execution is None:
+            return counts
+
+        pending = self.store.pending_orders(symbol)
+        if pending.empty:
+            return counts
+
+        bars = self.parquet.read("klines", symbol, interval)
+        if bars.empty:
+            return counts
+
+        model = self.execution
+        for _, order in pending.iterrows():
+            signal_time = pd.Timestamp(order["signal_time"])
+            later = bars.index[bars.index > signal_time]
+            if len(later) == 0:
+                counts["waiting"] += 1
+                continue
+
+            bar_time = later[0]
+            bar = bars.loc[bar_time]
+            direction = int(order["direction"])
+            limit_price = float(order["limit_price"])
+
+            if direction > 0:
+                hit = bar["low"] <= limit_price * (1 - model.fill_buffer)
+            else:
+                hit = bar["high"] >= limit_price * (1 + model.fill_buffer)
+
+            if hit:
+                self.store.fill_pending(
+                    int(order["id"]), bar_time, limit_price, was_maker=True
+                )
+                counts["filled"] += 1
+            elif model.unfilled == "chase":
+                # Cross the spread rather than lose the trade: the orders that
+                # miss are disproportionately the ones about to work.
+                chased = float(bar["close"]) * (1 + direction * model.slippage)
+                self.store.fill_pending(int(order["id"]), bar_time, chased, was_maker=False)
+                counts["chased"] += 1
+            else:
+                self.store.cancel_pending(int(order["id"]))
+                counts["cancelled"] += 1
+
+        return counts
+
+    def _maker_exit(
+        self,
+        bars: pd.DataFrame,
+        exit_pos: int,
+        direction: int,
+        model: ExecutionModel,
+    ) -> tuple[float, float, bool]:
+        """Exit with a limit if the bar reaches it, otherwise at market.
+
+        An exit cannot be skipped. The position exists and has to be closed, so
+        an unfilled exit limit always crosses the spread — makers can decline to
+        enter, never to leave.
+        """
+        bar = bars.iloc[exit_pos]
+        # Quoted from the previous close, the newest price available when the
+        # order would be sent.
+        reference = float(bars["close"].iloc[exit_pos - 1]) if exit_pos > 0 else float(bar["open"])
+
+        if direction > 0:
+            limit_price = reference * (1 + model.limit_offset)
+            hit = bar["high"] >= limit_price * (1 + model.fill_buffer)
+        else:
+            limit_price = reference * (1 - model.limit_offset)
+            hit = bar["low"] <= limit_price * (1 - model.fill_buffer)
+
+        if hit:
+            return limit_price, model.maker_fee, True
+
+        market_price = float(bar["close"]) * (1 - direction * model.slippage)
+        return market_price, model.taker_fee + model.slippage, False
+
     def close_due_trades(
         self, symbol: str, interval: str, horizon: int, now: pd.Timestamp | None = None
     ) -> int:
@@ -86,12 +210,28 @@ class PaperTrader:
 
             direction = int(trade["direction"])
             entry_price = float(trade["entry_price"])
-            exit_price = float(bars["open"].iloc[exit_pos])
+
+            if self.execution is None:
+                exit_price = float(bars["open"].iloc[exit_pos])
+                entry_cost = exit_cost = self._side_cost
+            else:
+                exit_price, exit_cost, _ = self._maker_exit(
+                    bars, exit_pos, direction, self.execution
+                )
+                # Whether the entry actually rested or crossed decides what it
+                # cost. Assuming the maker fee for a chased entry would make the
+                # paper ledger cheaper than the trade really was.
+                entry_was_maker = bool(trade.get("entry_was_maker") or 0)
+                entry_cost = (
+                    self.execution.maker_fee
+                    if entry_was_maker
+                    else self.execution.taker_fee + self.execution.slippage
+                )
 
             gross = direction * (exit_price / entry_price - 1.0)
             hours_held = horizon * _bar_hours(bars.index)
             funding = direction * self.cfg.strategy.funding_rate * (hours_held / 8.0)
-            cost = 2 * self._side_cost + funding
+            cost = entry_cost + exit_cost + funding
             net = gross - cost
 
             self.store.close_trade(

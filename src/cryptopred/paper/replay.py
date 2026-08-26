@@ -54,7 +54,10 @@ def replay_predictions(
     later by the trader's own logic — not by a parallel calculation here.
     """
     parquet = ParquetStore(cfg.data.root / "raw")
-    trader = PaperTrader(cfg=cfg, store=store, parquet=parquet)
+    execution = cfg.strategy.execution_model()
+    trader = PaperTrader(
+        cfg=cfg, store=store, parquet=parquet, execution=execution
+    )
 
     predicted = proba.argmax(axis=1)
     confidence = proba.max(axis=1)
@@ -68,23 +71,39 @@ def replay_predictions(
             continue
 
         signal = 1 if cls == UP else -1
-        if trader.open_from_signal(
-            symbol=symbol,
-            interval=interval,
-            signal=signal,
-            entry_time=ts,
-            entry_price=float(bars.loc[ts, "close"]),
-            model_version=model_version,
-            horizon=horizon,
-        ):
+        if execution is None:
+            placed = trader.open_from_signal(
+                symbol=symbol,
+                interval=interval,
+                signal=signal,
+                entry_time=ts,
+                entry_price=float(bars.loc[ts, "close"]),
+                model_version=model_version,
+                horizon=horizon,
+            )
+        else:
+            # Post a limit quoted from the close the model actually saw, exactly
+            # as the scheduler would, then let the trader's own fill logic decide.
+            placed = trader.post_limit(
+                symbol=symbol,
+                interval=interval,
+                signal=signal,
+                signal_time=ts,
+                signal_close=float(bars.loc[ts, "close"]),
+                model_version=model_version,
+                horizon=horizon,
+            )
+        if placed:
             opened += 1
 
+    fills = trader.resolve_pending(symbol, interval)
     closed = trader.close_due_trades(symbol, interval, horizon=horizon)
     trades = store.closed_trades(symbol, limit=1_000_000)
 
     return {
         "opened": opened,
         "closed": closed,
+        "fills": fills,
         "trades": trades,
         "summary": trader.summary(symbol),
         "long": _side_stats(trades, direction=1),
@@ -183,7 +202,7 @@ def format_replay(result: dict[str, Any], symbol: str, threshold: float) -> str:
         "=" * 70,
         "Driven through the live PaperTrader, not the backtest engine.",
         "",
-        f"Trades opened:   {result['opened']:,}",
+        f"Orders placed:   {result['opened']:,}",
         f"Trades closed:   {result['closed']:,}",
         f"Starting equity: {summary['equity'] - summary['total_pnl_usd']:,.0f} USDT",
         f"Final equity:    {summary['equity']:,.0f} USDT",
@@ -196,6 +215,18 @@ def format_replay(result: dict[str, Any], symbol: str, threshold: float) -> str:
         _side_row("LONG", long_s),
         _side_row("SHORT", short_s),
     ]
+
+    fills = result.get("fills")
+    if fills and (fills["filled"] or fills["chased"] or fills["cancelled"]):
+        total = fills["filled"] + fills["chased"] + fills["cancelled"]
+        lines += [
+            "",
+            "EXECUTION — a limit that misses is not a free option; the misses cluster",
+            "on the moves the model got right",
+            f"  rested at the limit: {fills['filled']:,} ({fills['filled'] / total:.1%})",
+            f"  chased at market:    {fills['chased']:,} ({fills['chased'] / total:.1%})",
+            f"  cancelled unfilled:  {fills['cancelled']:,}",
+        ]
 
     if not equity.empty:
         peak = equity.cummax()

@@ -30,10 +30,16 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
     """
     parquet = ParquetStore(cfg.data.root / "raw")
     predictions = PredictionStore(cfg.data.root / "predictions.db")
-    trader = PaperTrader(cfg=cfg, store=predictions, parquet=parquet)
+    execution = cfg.strategy.execution_model()
+    trader = PaperTrader(
+        cfg=cfg, store=predictions, parquet=parquet, execution=execution
+    )
     horizon = cfg.labels.horizon_bars.get(interval, 24)
 
-    counts = {"bars": 0, "predictions": 0, "scored": 0, "opened": 0, "closed": 0}
+    counts = {
+        "bars": 0, "predictions": 0, "scored": 0, "opened": 0, "closed": 0,
+        "filled": 0, "chased": 0, "cancelled": 0, "pending": 0,
+    }
 
     sync_cfg = cfg.model_copy(deep=True)
     sync_cfg.data.intervals = [interval]
@@ -62,16 +68,37 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
                 counts["predictions"] += 1
                 bars = parquet.read("klines", symbol, interval)
                 entry_time = bars.index.max()
-                if trader.open_from_signal(
+                last_close = float(bars["close"].iloc[-1])
+
+                if execution is None:
+                    if trader.open_from_signal(
+                        symbol=symbol,
+                        interval=interval,
+                        signal=prediction.signal,
+                        entry_time=entry_time,
+                        entry_price=last_close,
+                        model_version=prediction.model_version,
+                        horizon=horizon,
+                    ):
+                        counts["opened"] += 1
+                elif trader.post_limit(
                     symbol=symbol,
                     interval=interval,
                     signal=prediction.signal,
-                    entry_time=entry_time,
-                    entry_price=float(bars["close"].iloc[-1]),
+                    signal_time=entry_time,
+                    signal_close=last_close,
                     model_version=prediction.model_version,
                     horizon=horizon,
                 ):
                     counts["opened"] += 1
+
+        # Resting orders are resolved before anything else uses positions, so
+        # a limit that filled this bar is a position for the rest of the cycle.
+        fills = trader.resolve_pending(symbol, interval)
+        counts["filled"] += fills["filled"]
+        counts["chased"] += fills["chased"]
+        counts["cancelled"] += fills["cancelled"]
+        counts["pending"] += fills["waiting"]
 
         counts["scored"] += score_pending(
             predictions,

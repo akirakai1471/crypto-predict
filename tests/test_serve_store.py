@@ -118,3 +118,62 @@ def test_store_survives_reopen(tmp_path):
     _record(first, 0)
     second = PredictionStore(path)
     assert second.latest_prediction("BTCUSDT", "1h") is not None
+
+
+def test_old_database_is_migrated_to_the_signal_time_key(tmp_path):
+    """A database created before maker support must survive the upgrade with its
+    trades intact, and gain the key that makes resting orders possible."""
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE paper_trades (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol          TEXT    NOT NULL,
+            interval        TEXT    NOT NULL,
+            direction       INTEGER NOT NULL,
+            entry_time      TEXT    NOT NULL,
+            entry_price     REAL    NOT NULL,
+            exit_time       TEXT,
+            exit_price      REAL,
+            size_usd        REAL    NOT NULL,
+            gross_return    REAL,
+            cost            REAL,
+            net_return      REAL,
+            pnl_usd         REAL,
+            status          TEXT    NOT NULL,
+            model_version   TEXT    NOT NULL,
+            UNIQUE (symbol, interval, entry_time)
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO paper_trades (symbol, interval, direction, entry_time, "
+        "entry_price, size_usd, status, model_version, net_return, pnl_usd, exit_time) "
+        "VALUES ('BTCUSDT','1h',1,'2024-01-01T00:00:00+00:00',100.0,416.0,'closed',"
+        "'v1',0.01,4.16,'2024-01-02T00:00:00+00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    store = PredictionStore(path)          # triggers the rebuild
+    closed = store.closed_trades("BTCUSDT")
+    assert len(closed) == 1
+    assert closed.iloc[0]["signal_time"] == "2024-01-01T00:00:00+00:00"
+
+    # the new key permits what the old one crashed on
+    assert store.post_limit_order(
+        "BTCUSDT", "1h", 1, pd.Timestamp("2024-02-01", tz="UTC"), 99.0, 416.0, "v1"
+    )
+
+
+def test_migration_is_idempotent(tmp_path):
+    path = tmp_path / "twice.db"
+    first = PredictionStore(path)
+    first.open_trade(
+        "BTCUSDT", "1h", 1, pd.Timestamp("2024-01-01", tz="UTC"), 100.0, 416.0, "v1"
+    )
+    second = PredictionStore(path)          # opening again must not lose rows
+    assert len(second.open_trades("BTCUSDT")) == 1

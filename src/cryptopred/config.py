@@ -30,6 +30,21 @@ class LabelConfig(BaseModel):
     band_k: float = 0.5
 
 
+class ExecutionConfig(BaseModel):
+    """How the paper trader sends orders.
+
+    Market orders always fill and cost more. Limit orders cost less but fill
+    only when price comes to them, and they miss disproportionately when price
+    runs the way the model predicted — see docs/findings.md.
+    """
+
+    style: str = "taker"              # "taker" or "maker"
+    maker_fee: float = 0.0002
+    limit_offset: float = 0.002       # how far inside the market to post
+    unfilled: str = "chase"           # "chase" or "skip"; skip loses to taker
+    fill_buffer: float = 0.0005       # price must trade through, not merely touch
+
+
 class StrategyConfig(BaseModel):
     """Trading rules applied on top of model probabilities."""
 
@@ -38,6 +53,27 @@ class StrategyConfig(BaseModel):
     slippage: float = 0.0002
     funding_rate: float = 0.0001
     starting_capital: float = 10_000.0
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+
+    def execution_model(self):
+        """Build the backtest execution model this config describes.
+
+        Returns None for taker, which keeps the original market-order path.
+        """
+        if self.execution.style != "maker":
+            return None
+        from cryptopred.backtest.execution import ExecutionModel
+
+        return ExecutionModel(
+            style="maker",
+            taker_fee=self.taker_fee,
+            maker_fee=self.execution.maker_fee,
+            slippage=self.slippage,
+            limit_offset=self.execution.limit_offset,
+            unfilled=self.execution.unfilled,
+            fill_buffer=self.execution.fill_buffer,
+            limit_reference="signal_close",
+        )
 
 
 class FeatureConfig(BaseModel):

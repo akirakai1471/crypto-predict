@@ -21,6 +21,19 @@ strategy:
   taker_fee: 0.0005
   slippage: 0.0002
 
+  execution:
+    # Limit orders roughly double the doubled-fee cushion (+33.6% -> +61.4% in
+    # backtest). Two settings below are not preferences, they are findings:
+    #   unfilled: chase   — every skip-on-miss variant LOSES to market orders,
+    #                       because the orders that miss are the winners.
+    #   fill_buffer > 0   — price must trade THROUGH the limit, not merely touch
+    #                       it. Believing a touch inflated the result by ~2/3.
+    style: maker
+    maker_fee: 0.0002
+    limit_offset: 0.002
+    unfilled: chase
+    fill_buffer: 0.0005
+
 features:
   zscore_window: 200
   mtf_rules:

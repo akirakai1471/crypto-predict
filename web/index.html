@@ -231,6 +231,20 @@ a { color: var(--accent); }
   <section>
     <p class="eyebrow">Paper trading — tiền giả, không kết nối tài khoản sàn</p>
     <div class="grid stats" id="paper-stats"></div>
+    <p class="meter-note" id="exec-note" style="margin-top:12px"></p>
+  </section>
+
+  <section id="pending-section" hidden>
+    <p class="eyebrow">Lệnh limit đang chờ khớp — chưa phải vị thế</p>
+    <div class="card table-scroll">
+      <table>
+        <thead><tr>
+          <th>Nến tín hiệu</th><th>Coin</th><th>Chiều</th>
+          <th class="r">Giá limit</th><th class="r">Cỡ lệnh</th>
+        </tr></thead>
+        <tbody id="pending"></tbody>
+      </table>
+    </div>
   </section>
 
   <section>
@@ -386,13 +400,15 @@ async function load() {
 
   try {
     const health = await getJSON("/api/health");
-    const rows = health.data.filter(r => r.bars > 0);
+    // Only the traded interval matters here. The 1m store is kept for research
+    // and is not synced by the scheduler, so its age is not a fault to alarm on.
+    const rows = health.data.filter(r => r.bars > 0 && r.interval === "1h");
     const worst = rows.length ? Math.max(...rows.map(r => r.minutes_behind ?? 1e9)) : null;
     const dot = document.getElementById("health-dot");
     const txt = document.getElementById("health-text");
     if (worst === null) { dot.className = "dot"; txt.textContent = "chưa có dữ liệu"; }
-    else if (worst > 180) { dot.className = "dot stale"; txt.textContent = `dữ liệu trễ ${Math.round(worst)} phút`; }
-    else { dot.className = "dot live"; txt.textContent = `dữ liệu mới nhất cách ${Math.round(worst)} phút`; }
+    else if (worst > 180) { dot.className = "dot stale"; txt.textContent = `dữ liệu 1h trễ ${Math.round(worst)} phút`; }
+    else { dot.className = "dot live"; txt.textContent = `nến 1h mới nhất cách ${Math.round(worst)} phút`; }
   } catch (e) { document.getElementById("health-text").textContent = "không đọc được trạng thái"; }
 
   const signalsEl = document.getElementById("signals");
@@ -401,6 +417,8 @@ async function load() {
   const paperTiles = [];
   const historyRows = [];
   const chartCards = [];
+  const pendingRows = [];
+  const execNotes = [];
   const overrideNotes = [];
   let caveatText = "";
 
@@ -455,6 +473,23 @@ async function load() {
     } catch (e) { /* metrics unavailable for this symbol */ }
 
     try {
+      const pos = await getJSON(`/api/paper/positions?symbol=${symbol}`);
+      for (const o of pos.pending) {
+        const v = signalWord(o.direction);
+        pendingRows.push(`<tr>
+          <td class="num">${shortTime(o.signal_time)}</td>
+          <td>${o.symbol}</td>
+          <td><span class="pill ${v.cls}">${v.text}</span></td>
+          <td class="r num">${fmtNum(o.limit_price)}</td>
+          <td class="r num">${fmtNum(o.size_usd, 0)}</td>
+        </tr>`);
+      }
+      if (pos.execution && pos.execution.rested_share !== null) {
+        execNotes.push(`${symbol}: ${fmtPct(pos.execution.rested_share)} lệnh nằm chờ khớp được (${pos.execution.n_rested}/${pos.execution.n_closed}), phần còn lại phải đuổi bằng lệnh market`);
+      }
+    } catch (e) { /* paper positions unavailable */ }
+
+    try {
       const h = await getJSON(`/api/history?symbol=${symbol}&interval=${interval}&limit=60`);
       for (const r of h.rows) {
         const v = signalWord(r.signal);
@@ -487,6 +522,20 @@ async function load() {
     '<div class="empty">Chưa có dự đoán nào được chấm điểm. Chạy scheduler và đợi đủ horizon.</div>';
   document.getElementById("paper-stats").innerHTML = paperTiles.join("") ||
     '<div class="empty">Chưa có lệnh paper nào.</div>';
+  const pendingEl = document.getElementById("pending");
+  const pendingSection = document.getElementById("pending-section");
+  if (pendingRows.length) {
+    pendingEl.innerHTML = pendingRows.join("");
+    pendingSection.hidden = false;
+  } else {
+    pendingSection.hidden = true;
+  }
+
+  document.getElementById("exec-note").textContent =
+    cfg.execution_style === "maker"
+      ? `Đặt lệnh limit cách giá ${(cfg.limit_offset * 100).toFixed(2)}%, phí maker ${(cfg.maker_fee * 100).toFixed(3)}%. Không khớp thì ${cfg.unfilled === "chase" ? "đuổi bằng lệnh market" : "huỷ lệnh"}. ${execNotes.join(" · ")}`
+      : `Đặt lệnh market, phí taker ${(cfg.taker_fee * 100).toFixed(3)}%/chiều.`;
+
   document.getElementById("charts").innerHTML = chartCards.join("") ||
     '<div class="empty">Chưa có dữ liệu nến.</div>';
   document.getElementById("history").innerHTML = historyRows.join("") ||
@@ -499,7 +548,7 @@ async function load() {
     `<strong>Đọc trước khi tin số:</strong> ${caveatText || "Bằng chứng backtest là 1 cấu hình đạt trên 28 cấu hình đã xét — xấp xỉ mức may rủi. ETHUSDT thất bại ở mọi ngưỡng. Xem docs/findings.md."}${overrideHtml}`;
 
   document.getElementById("footer").textContent =
-    `Horizon ${cfg.horizon_bars["1h"]} nến · ngưỡng ${(cfg.signal_threshold * 100).toFixed(0)}% · phí ${(cfg.taker_fee * 100).toFixed(3)}%/chiều + trượt giá ${(cfg.slippage * 100).toFixed(3)}% · không có kết nối giao dịch thật`;
+    `Horizon ${cfg.horizon_bars["1h"]} nến · ngưỡng ${(cfg.signal_threshold * 100).toFixed(0)}% · ${cfg.execution_style === "maker" ? `lệnh limit, phí maker ${(cfg.maker_fee * 100).toFixed(3)}%` : `lệnh market, phí taker ${(cfg.taker_fee * 100).toFixed(3)}%`}/chiều · không có kết nối giao dịch thật`;
 }
 
 load().catch(err => {

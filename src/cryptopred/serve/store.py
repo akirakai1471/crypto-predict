@@ -44,8 +44,13 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     symbol          TEXT    NOT NULL,
     interval        TEXT    NOT NULL,
     direction       INTEGER NOT NULL,
-    entry_time      TEXT    NOT NULL,
-    entry_price     REAL    NOT NULL,
+    -- The bar whose close produced the signal. This is the natural key: one
+    -- order per signal. Keying on entry_time instead breaks as soon as a
+    -- resting limit fills, because its entry_time then moves onto the bar the
+    -- next pending order already occupies.
+    signal_time     TEXT    NOT NULL,
+    entry_time      TEXT,
+    entry_price     REAL,
     exit_time       TEXT,
     exit_price      REAL,
     size_usd        REAL    NOT NULL,
@@ -55,11 +60,61 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     pnl_usd         REAL,
     status          TEXT    NOT NULL,
     model_version   TEXT    NOT NULL,
-    UNIQUE (symbol, interval, entry_time)
+    limit_price     REAL,
+    order_style     TEXT,
+    entry_was_maker INTEGER,
+    exit_was_maker  INTEGER,
+    UNIQUE (symbol, interval, signal_time)
 );
 
 CREATE INDEX IF NOT EXISTS idx_trades_status ON paper_trades (status);
 """
+
+
+def _needs_rebuild(conn: sqlite3.Connection) -> bool:
+    """True when paper_trades still carries the original entry_time unique key.
+
+    SQLite cannot alter a constraint in place, so an existing database has to be
+    copied into a new table. Detecting it from the stored SQL keeps the upgrade
+    idempotent: running it twice is harmless.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'paper_trades'"
+    ).fetchone()
+    if row is None:
+        return False
+    return "UNIQUE (symbol, interval, entry_time)" in (row["sql"] or "")
+
+
+def _rebuild_paper_trades(conn: sqlite3.Connection) -> None:
+    """Move an old paper_trades table onto the signal_time key, keeping its rows."""
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(paper_trades)")}
+    # Rows written before signal_time existed were entered on the signal bar.
+    source_signal = "signal_time" if "signal_time" in columns else "entry_time"
+    optional = {
+        name: (name if name in columns else "NULL")
+        for name in ("limit_price", "order_style", "entry_was_maker", "exit_was_maker")
+    }
+
+    conn.execute("ALTER TABLE paper_trades RENAME TO paper_trades_old")
+    conn.executescript(SCHEMA)
+    conn.execute(
+        f"""
+        INSERT INTO paper_trades
+            (symbol, interval, direction, signal_time, entry_time, entry_price,
+             exit_time, exit_price, size_usd, gross_return, cost, net_return,
+             pnl_usd, status, model_version, limit_price, order_style,
+             entry_was_maker, exit_was_maker)
+        SELECT symbol, interval, direction,
+               COALESCE({source_signal}, entry_time), entry_time, entry_price,
+               exit_time, exit_price, size_usd, gross_return, cost, net_return,
+               pnl_usd, status, model_version, {optional["limit_price"]},
+               {optional["order_style"]}, {optional["entry_was_maker"]},
+               {optional["exit_was_maker"]}
+        FROM paper_trades_old
+        """
+    )
+    conn.execute("DROP TABLE paper_trades_old")
 
 
 class PredictionStore:
@@ -68,6 +123,8 @@ class PredictionStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            if _needs_rebuild(conn):
+                _rebuild_paper_trades(conn)
 
     @contextmanager
     def _connect(self):
@@ -209,14 +266,15 @@ class PredictionStore:
             cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO paper_trades
-                    (symbol, interval, direction, entry_time, entry_price, size_usd,
-                     status, model_version)
-                VALUES (?, ?, ?, ?, ?, ?, 'open', ?)
+                    (symbol, interval, direction, signal_time, entry_time,
+                     entry_price, size_usd, status, model_version, order_style)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, 'taker')
                 """,
                 (
                     symbol,
                     interval,
                     int(direction),
+                    entry_time.isoformat(),
                     entry_time.isoformat(),
                     float(entry_price),
                     float(size_usd),
@@ -248,6 +306,73 @@ class PredictionStore:
                     float(pnl_usd),
                     int(trade_id),
                 ),
+            )
+
+    def post_limit_order(
+        self,
+        symbol: str,
+        interval: str,
+        direction: int,
+        signal_time: pd.Timestamp,
+        limit_price: float,
+        size_usd: float,
+        model_version: str,
+    ) -> bool:
+        """Record a resting limit order that has not filled yet.
+
+        A pending row is not a position. It becomes one only when the market
+        trades to the limit, and it may never do so — which is the whole point
+        of modelling maker execution rather than assuming it.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO paper_trades
+                    (symbol, interval, direction, signal_time, size_usd,
+                     status, model_version, limit_price, order_style)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 'maker')
+                """,
+                (
+                    symbol,
+                    interval,
+                    int(direction),
+                    signal_time.isoformat(),
+                    float(size_usd),
+                    model_version,
+                    float(limit_price),
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def pending_orders(self, symbol: str | None = None) -> pd.DataFrame:
+        query = "SELECT * FROM paper_trades WHERE status = 'pending'"
+        params: tuple = ()
+        if symbol:
+            query += " AND symbol = ?"
+            params = (symbol,)
+        with self._connect() as conn:
+            return pd.read_sql_query(query + " ORDER BY signal_time", conn, params=params)
+
+    def fill_pending(
+        self,
+        trade_id: int,
+        entry_time: pd.Timestamp,
+        entry_price: float,
+        was_maker: bool,
+    ) -> None:
+        """Promote a resting order to an open position."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE paper_trades SET status = 'open', entry_time = ?, "
+                "entry_price = ?, entry_was_maker = ? WHERE id = ?",
+                (entry_time.isoformat(), float(entry_price), int(was_maker), int(trade_id)),
+            )
+
+    def cancel_pending(self, trade_id: int) -> None:
+        """The limit never filled and will not be chased: no trade happened."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE paper_trades SET status = 'cancelled' WHERE id = ?", (int(trade_id),)
             )
 
     def open_trades(self, symbol: str | None = None) -> pd.DataFrame:

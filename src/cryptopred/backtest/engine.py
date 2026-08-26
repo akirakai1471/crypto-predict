@@ -114,6 +114,8 @@ def backtest(
             entry = entry_fill(
                 opens[entry_pos], highs[entry_pos], lows[entry_pos], closes[entry_pos],
                 direction, execution,
+                # The last price observable when the order would have been sent.
+                signal_close=closes[position],
             )
             if not entry.filled:
                 n_unfilled += 1

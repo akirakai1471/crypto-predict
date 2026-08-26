@@ -88,3 +88,29 @@ def test_dashboard_is_served(client):
     res = client.get("/")
     assert res.status_code == 200
     assert "Bảng Tín Hiệu Crypto" in res.text
+
+
+def test_health_measures_age_from_the_bar_close_not_its_open(client):
+    """An hourly bar that has just closed is fresh. Measuring from the open made
+    every feed look an hour behind and lit a permanent warning."""
+    body = client.get("/api/health").json()
+    row = body["data"][0]
+    open_time = pd.Timestamp(row["last_bar"])
+    close_time = pd.Timestamp(row["last_close"])
+
+    assert close_time > open_time
+    expected = (pd.Timestamp.now(tz="UTC") - close_time).total_seconds() / 60
+    assert row["minutes_behind"] == pytest.approx(expected, abs=1.0)
+
+
+def test_config_reports_the_execution_style_in_use(client):
+    body = client.get("/api/config").json()
+    assert body["execution_style"] in {"taker", "maker"}
+    assert body["maker_fee"] < body["taker_fee"]
+
+
+def test_paper_positions_separates_resting_orders_from_positions(client):
+    body = client.get("/api/paper/positions?symbol=BTCUSDT").json()
+    assert "pending" in body
+    assert "open" in body
+    assert body["execution"]["style"] in {"taker", "maker"}
