@@ -25,15 +25,14 @@ def cfg(tmp_path):
 def _log(cfg, n_signals, n_correct, n_flat=0, scored=True):
     store = PredictionStore(cfg.data.root / "predictions.db")
     base = pd.Timestamp("2024-01-01", tz="UTC")
-    row = 0
     for i in range(n_signals + n_flat):
-        signal = 1 if i < n_signals else 0
         store.record_prediction(
             symbol="BTCUSDT", interval="1h",
-            bar_close_time=base + pd.Timedelta(hours=row),
-            proba=(0.2, 0.2, 0.6), signal=signal, close_price=100.0, model_version="v1",
+            bar_close_time=base + pd.Timedelta(hours=i),
+            proba=(0.2, 0.2, 0.6),
+            signal=1 if i < n_signals else 0,
+            close_price=100.0, model_version="v1",
         )
-        row += 1
 
     if scored:
         pending = store.unscored("BTCUSDT", "1h")
