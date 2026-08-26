@@ -145,6 +145,45 @@ Bẫy phải tránh: model phụ dùng chung cho cả 2 chiều sẽ học "shor
 mẫu dữ liệu thị trường tăng), làm chiến lược lệch hẳn một chiều. Phải train
 **riêng từng chiều** — mặc định đã bật.
 
+## Cỡ lệnh theo xác suất: cũng không ăn thua, và biết rõ vì sao
+
+```bash
+uv run cryptopred-model sizing --symbol BTCUSDT --horizon 24 --threshold 0.60
+```
+
+So 4 cách đặt cỡ lệnh trên **cùng model, cùng tín hiệu, cùng fold** — chỉ khác
+số tiền đặt. Quan trọng: bảng có phần **cân bằng exposure**, vì Kelly gần điểm
+hoà vốn chỉ đặt vài % vốn nên lãi ít hơn đơn giản vì *đặt ít tiền hơn*, không
+liên quan gì tới khả năng phân bổ.
+
+Cùng vốn (~1.6%):
+
+| Cách | Lợi nhuận | Drawdown | Sharpe |
+|---|---|---|---|
+| **fixed** | **+12.8%** | **−3.6%** | **0.67** |
+| sqrt_kelly | +11.6% | −4.3% | 0.57 |
+| kelly | +10.6% | −5.0% | 0.47 |
+| linear | +9.7% | −5.5% | 0.40 |
+
+Đặt đều thắng cả 3 chỉ số. Thứ tự có quy luật: **càng thay đổi cỡ lệnh nhiều,
+càng tệ.**
+
+Lý do đo được, không phải phỏng đoán. Trong số tín hiệu **đã vượt ngưỡng 0.60**:
+
+| Tin cậy | Tỉ lệ đúng | Lãi TB |
+|---|---|---|
+| 0.60–0.65 | 56.99% | +0.315% |
+| **0.65–0.70** | **63.00%** | **+0.794%** |
+| 0.70–0.80 | 59.32% | +0.156% |
+| 0.80–1.00 | 57.29% | +0.241% |
+
+Tương quan giữa tin cậy và lợi nhuận: **−0.0223**. Nhóm tin cậy cao nhất không
+phải nhóm lời nhất.
+
+Không mâu thuẫn với việc accuracy tăng đều theo tin cậy trên toàn bộ nến (36%→63%).
+Hai điều cùng đúng, và ghép lại nói một điều chính xác: **ngưỡng đã vắt hết
+thông tin trong độ tin cậy; không còn gì cho cỡ lệnh.**
+
 ## Kiểm tra long/short — thứ mà tổng lợi nhuận che giấu
 
 ```bash

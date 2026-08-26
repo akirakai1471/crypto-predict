@@ -253,6 +253,58 @@ cannot do — position sizing rather than filtering. A probability of profit is 
 natural bet size, and varying size is something no threshold can express. That is
 a different experiment and it has not been run.
 
+## Position sizing by probability: also no benefit, and now we know why
+
+Meta-labelling failed because the secondary's job overlapped the threshold's.
+Sizing is the job a threshold genuinely cannot do — a threshold says act or
+don't, and cannot say *how much*. So the second model was given that job
+instead: stake more when the probability is higher, using fractional Kelly.
+
+The first comparison was rigged and had to be thrown out. Kelly near break-even
+stakes a few percent per trade, so it deployed 1.7% average exposure against
+fixed sizing's 8.1% and lost on total return for a reason that had nothing to do
+with allocation skill: it simply bet less money. Matching average exposure
+across every rule isolates the real question — given the same capital, does
+betting more on stronger signals beat betting the same on all of them?
+
+**BTCUSDT, 24h horizon, threshold 0.60, exposure held equal at ~1.6%:**
+
+| Rule | Return | Max DD | Sharpe |
+|---|---|---|---|
+| **fixed** | **+12.8%** | **−3.6%** | **0.67** |
+| sqrt_kelly | +11.6% | −4.3% | 0.57 |
+| kelly | +10.6% | −5.0% | 0.47 |
+| linear | +9.7% | −5.5% | 0.40 |
+
+Fixed wins on return, drawdown and Sharpe simultaneously, and the ordering is
+monotonic in how aggressively each rule varies the stake: `sqrt_kelly`, the
+flattest rule, lands closest to fixed. **The more the stake varies, the worse
+the result.**
+
+The diagnosis is measurable rather than a shrug. Among signals that already
+cleared the 0.60 threshold:
+
+| Confidence | Trades | Hit rate | Avg abs move | Avg net |
+|---|---|---|---|---|
+| 0.60 – 0.65 | 1,116 | 56.99% | 2.632% | +0.315% |
+| **0.65 – 0.70** | 800 | **63.00%** | 2.824% | **+0.794%** |
+| 0.70 – 0.80 | 1,320 | 59.32% | 2.433% | +0.156% |
+| 0.80 – 1.00 | 981 | 57.29% | 2.537% | +0.241% |
+
+Correlation between confidence and net return is **−0.0223**; between confidence
+and absolute move size, **−0.0263**. The most profitable bucket is the middle
+one, not the most confident.
+
+This does not contradict the earlier finding that accuracy rises monotonically
+with confidence across all bars, from 36% to 63%. Both are true, and together
+they say something precise: **the threshold extracts all the information
+confidence contains, and there is nothing left over for stake size.** Below the
+threshold confidence separates good from bad; above it, it does not.
+
+That closes the question the meta-labelling section left open. A second model
+was tried at filtering and at sizing. Neither pays, for the same underlying
+reason in two guises.
+
 ## Decision
 
 Defaults stay at the 24-hour horizon and a 0.60 threshold. That is now the only

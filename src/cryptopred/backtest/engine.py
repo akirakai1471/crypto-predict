@@ -57,9 +57,17 @@ def backtest(
     `signals` must have a `signal` column of +1 (long), -1 (short) or 0 (stand
     aside), indexed like `bars`. A signal on bar `t` enters at the open of bar
     `t+1` and exits at the open of bar `t+1+horizon`.
+
+    An optional `size` column in [0, 1] scales how much of the trade's capital
+    slot is used, so a rule can bet less on weaker signals. It cannot exceed 1:
+    variable sizing may reduce exposure but never introduce leverage.
     """
     costs = costs or CostModel()
     aligned = signals.reindex(bars.index)["signal"].fillna(0).astype(int)
+    if "size" in signals.columns:
+        sizes = signals.reindex(bars.index)["size"].fillna(0.0).clip(0.0, 1.0).to_numpy()
+    else:
+        sizes = np.ones(len(bars))
 
     opens = bars["open"].to_numpy()
     index = bars.index
@@ -70,6 +78,9 @@ def backtest(
     for position, direction in enumerate(aligned.to_numpy()):
         if direction == FLAT:
             continue
+        size = float(sizes[position])
+        if size <= 0:
+            continue   # the sizing rule declined to fund this signal
         entry_pos = position + 1
         exit_pos = position + 1 + horizon
         # Without a bar to exit on, the trade could never have been closed.
@@ -92,6 +103,7 @@ def backtest(
                 "direction": direction,
                 "entry_price": entry_price,
                 "exit_price": exit_price,
+                "size": size,
                 "gross_return": gross,
                 "cost": costs.round_trip_cost() + funding,
                 "net_return": net,
@@ -137,7 +149,7 @@ def _build_equity(
     if trades.empty or n < 2:
         return equity, exposure
 
-    weight = 1.0 / max(horizon, 1)
+    slot = 1.0 / max(horizon, 1)
     position = np.zeros(n)
     cash_flow = np.zeros(n)  # costs charged at entry, exit, and funding per bar
 
@@ -147,10 +159,19 @@ def _build_equity(
     entry_pos = index.get_indexer(trades["entry_time"])
     exit_pos = index.get_indexer(trades["exit_time"])
     directions = trades["direction"].to_numpy()
+    # A trade at half size commits half the capital and pays half the fees. Using
+    # the full slot here while the ledger records a smaller trade would make
+    # variable sizing look free.
+    trade_sizes = (
+        trades["size"].to_numpy() if "size" in trades.columns else np.ones(len(trades))
+    )
 
-    for entry, exit_, direction in zip(entry_pos, exit_pos, directions, strict=True):
+    for entry, exit_, direction, size in zip(
+        entry_pos, exit_pos, directions, trade_sizes, strict=True
+    ):
         if entry < 0 or exit_ < 0:
             continue
+        weight = slot * float(size)
         position[entry:exit_] += direction * weight
         cash_flow[entry] += per_side_cost * weight
         cash_flow[exit_] += per_side_cost * weight
