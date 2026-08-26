@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cryptopred",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--no-sync", "uvicorn", "cryptopred.serve.api:app", "--port", "8077"],
+      "port": 8077
+    }
+  ]
+}

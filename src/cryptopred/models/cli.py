@@ -32,6 +32,13 @@ def train(
     save: bool = typer.Option(
         False, help="Save a final model to the registry (only sensible after a GO verdict)."
     ),
+    override: str = typer.Option(
+        None,
+        help=(
+            "Save despite a failing verdict. Requires a written justification, which is "
+            "stored in the model metadata and displayed wherever the model is used."
+        ),
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Evaluate walk-forward, print the report, and optionally save the model."""
@@ -88,10 +95,13 @@ def train(
     if not save:
         return
 
-    if decision["decision"] != "GO":
+    if decision["decision"] != "GO" and not override:
         typer.echo(
             f"\nRefusing to save: verdict is {decision['decision']}. "
-            "A model that has not beaten its baselines does not belong in the registry."
+            "A model that has not beaten its baselines does not belong in the registry.\n"
+            "If you have a reason to save it anyway, pass --override with a written "
+            "justification; it is recorded in the model's metadata and shown on the "
+            "dashboard, permanently."
         )
         raise typer.Exit(code=1)
 
@@ -100,15 +110,25 @@ def train(
     final_train = dataset.iloc[: -horizon or None]
     result = train_fold(final_train, final_train.tail(1), train_config)
     registry = ModelRegistry(cfg.data.root / "models")
+    metrics = dict(evaluation["model"])
+    metrics["gate_decision"] = decision["decision"]
+    metrics["gate_reason"] = decision["reason"]
+    if override:
+        metrics["override_reason"] = override
+
     version = registry.save(
         result,
         symbol=symbol,
         interval=interval,
-        metrics=evaluation["model"],
+        metrics=metrics,
         config=train_config,
         n_train_rows=len(final_train),
     )
     typer.echo(f"\nSaved model {version}")
+    if override:
+        typer.echo(
+            f"  SAVED UNDER OVERRIDE — gate said {decision['decision']}: {decision['reason']}"
+        )
 
 
 @app.command()

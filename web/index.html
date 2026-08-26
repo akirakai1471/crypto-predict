@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bảng Tín Hiệu Crypto</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  --bg:        #eef1f5;
+  --surface:   #ffffff;
+  --surface-2: #f6f8fa;
+  --line:      #d5dce4;
+  --line-soft: #e6ebf1;
+  --ink:       #0f151d;
+  --ink-2:     #3d4855;
+  --muted:     #6b7786;
+  --accent:    #0d6f78;
+  --accent-dim:#8fb9bd;
+  --up:        #1a7a55;
+  --down:      #ac4238;
+  --idle:      #77838f;
+  --warn-bg:   #fdf6e7;
+  --warn-line: #e0c689;
+  --warn-ink:  #6d5312;
+  --shadow:    0 1px 2px rgba(15, 21, 29, .06), 0 8px 24px rgba(15, 21, 29, .05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #0a0e14;
+    --surface:   #121924;
+    --surface-2: #182130;
+    --line:      #2a3644;
+    --line-soft: #1e2836;
+    --ink:       #e3e9f1;
+    --ink-2:     #b3becc;
+    --muted:     #7b8899;
+    --accent:    #45b3bc;
+    --accent-dim:#2b5f65;
+    --up:        #3fae7d;
+    --down:      #d4675c;
+    --idle:      #7b8899;
+    --warn-bg:   #241f13;
+    --warn-line: #5c4a1f;
+    --warn-ink:  #d8bd77;
+    --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"] {
+  --bg:        #0a0e14;
+  --surface:   #121924;
+  --surface-2: #182130;
+  --line:      #2a3644;
+  --line-soft: #1e2836;
+  --ink:       #e3e9f1;
+  --ink-2:     #b3becc;
+  --muted:     #7b8899;
+  --accent:    #45b3bc;
+  --accent-dim:#2b5f65;
+  --up:        #3fae7d;
+  --down:      #d4675c;
+  --idle:      #7b8899;
+  --warn-bg:   #241f13;
+  --warn-line: #5c4a1f;
+  --warn-ink:  #d8bd77;
+  --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+.num { font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 64px; }
+
+header.top {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 18px;
+  padding-bottom: 16px; border-bottom: 2px solid var(--ink);
+}
+header.top h1 {
+  font-family: Archivo, "IBM Plex Sans", sans-serif;
+  font-weight: 700; font-size: 26px; letter-spacing: -.02em; margin: 0;
+  text-wrap: balance;
+}
+header.top .sub { color: var(--muted); font-size: 13px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--idle); }
+.dot.live { background: var(--up); }
+.dot.stale { background: var(--down); }
+
+.eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 10px;
+}
+
+.caveat {
+  margin: 18px 0 0; padding: 12px 14px;
+  background: var(--warn-bg); border: 1px solid var(--warn-line); border-left-width: 3px;
+  border-radius: 4px; color: var(--warn-ink); font-size: 13.5px;
+}
+.caveat strong { font-weight: 600; }
+
+section { margin-top: 30px; }
+.grid { display: grid; gap: 16px; }
+.grid.cards { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.grid.stats { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+  padding: 18px; box-shadow: var(--shadow);
+}
+
+/* --- signal card --- */
+.sig-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.sig-sym { font-family: Archivo, sans-serif; font-weight: 600; font-size: 19px; letter-spacing: -.01em; }
+.sig-price { font-size: 14px; color: var(--muted); }
+
+.verdict {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin: 14px 0 4px; padding: 7px 13px; border-radius: 3px;
+  font-family: Archivo, sans-serif; font-weight: 700; font-size: 15px; letter-spacing: .04em;
+  border: 1px solid;
+}
+.verdict.up   { color: var(--up);   border-color: var(--up);   background: color-mix(in srgb, var(--up) 9%, transparent); }
+.verdict.down { color: var(--down); border-color: var(--down); background: color-mix(in srgb, var(--down) 9%, transparent); }
+.verdict.idle { color: var(--idle); border-color: var(--line); background: var(--surface-2); }
+
+/* probability meter: the dead zone is drawn, so "no signal" reads as a state */
+.meter { margin-top: 16px; }
+.meter-row { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+.meter-label { width: 62px; font-size: 12px; color: var(--ink-2); }
+.meter-track {
+  position: relative; flex: 1; height: 15px; background: var(--surface-2);
+  border: 1px solid var(--line-soft); border-radius: 2px; overflow: hidden;
+}
+.meter-fill { height: 100%; }
+.meter-fill.up   { background: var(--up); }
+.meter-fill.down { background: var(--down); }
+.meter-fill.flat { background: var(--idle); }
+.meter-val { width: 52px; text-align: right; font-size: 13px; }
+.threshold-mark {
+  position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink);
+  opacity: .55;
+}
+.meter-note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+/* --- stat tiles --- */
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; }
+.tile .k { font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.tile .v { font-family: Archivo, sans-serif; font-size: 27px; font-weight: 600; letter-spacing: -.02em; margin-top: 4px; }
+.tile .v.small { font-size: 19px; }
+/* sample size travels with every rate — a percentage without its n is not a fact */
+.tile .n { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.tile.pos .v { color: var(--up); }
+.tile.neg .v { color: var(--down); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.table-scroll { overflow-x: auto; }
+th {
+  text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted);
+  padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+tbody tr:last-child td { border-bottom: none; }
+td.r, th.r { text-align: right; }
+.pill {
+  display: inline-block; padding: 1px 7px; border-radius: 2px;
+  font-size: 11.5px; font-weight: 600; border: 1px solid;
+}
+.pill.up   { color: var(--up);   border-color: color-mix(in srgb, var(--up) 45%, transparent); }
+.pill.down { color: var(--down); border-color: color-mix(in srgb, var(--down) 45%, transparent); }
+.pill.idle { color: var(--idle); border-color: var(--line); }
+.hit  { color: var(--up); }
+.miss { color: var(--down); }
+
+.empty { color: var(--muted); font-size: 13.5px; padding: 18px 0; }
+footer { margin-top: 42px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: no-preference) {
+  .meter-fill { transition: width .35s ease; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <h1>Bảng Tín Hiệu Crypto</h1>
+    <span class="sub"><span class="dot" id="health-dot"></span> <span id="health-text">đang tải…</span></span>
+  </header>
+
+  <div class="caveat" id="caveat">đang tải cảnh báo…</div>
+
+  <section>
+    <p class="eyebrow">Tín hiệu hiện tại</p>
+    <div class="grid cards" id="signals"><div class="empty">đang tải…</div></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Độ chính xác chạy thật — đo từ dự đoán đã ghi trước khi biết kết quả</p>
+    <div class="grid stats" id="live-stats"></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Paper trading — tiền giả, không kết nối tài khoản sàn</p>
+    <div class="grid stats" id="paper-stats"></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Lịch sử dự đoán</p>
+    <div class="card table-scroll">
+      <table>
+        <thead><tr>
+          <th>Nến đóng</th><th>Coin</th><th>Tín hiệu</th>
+          <th class="r">P(giảm)</th><th class="r">P(đứng)</th><th class="r">P(tăng)</th>
+          <th class="r">Giá</th><th class="r">Thực tế</th><th>Kết quả</th>
+        </tr></thead>
+        <tbody id="history"><tr><td colspan="9" class="empty">đang tải…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer id="footer">—</footer>
+</div>
+
+<script>
+const fmtPct = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : (v * 100).toFixed(d) + "%";
+const fmtNum = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : Number(v).toLocaleString("vi-VN", { minimumFractionDigits: d, maximumFractionDigits: d });
+const shortTime = (iso) => iso ? iso.replace("T", " ").slice(0, 16) : "—";
+
+async function getJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) {
+    // FastAPI wraps errors as {"detail": "..."}; show the sentence, not the JSON.
+    let msg = res.statusText;
+    try { msg = (await res.json()).detail || msg; } catch { /* not JSON */ }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+function signalWord(signal) {
+  if (signal === 1) return { text: "TĂNG", cls: "up" };
+  if (signal === -1) return { text: "GIẢM", cls: "down" };
+  return { text: "KHÔNG TÍN HIỆU", cls: "idle" };
+}
+
+function meterRow(label, value, cls, threshold) {
+  const markPos = threshold != null ? `<span class="threshold-mark" style="left:${(threshold * 100).toFixed(1)}%"></span>` : "";
+  return `<div class="meter-row">
+    <span class="meter-label">${label}</span>
+    <span class="meter-track"><span class="meter-fill ${cls}" style="width:${(value * 100).toFixed(1)}%"></span>${markPos}</span>
+    <span class="meter-val num">${fmtPct(value)}</span>
+  </div>`;
+}
+
+function signalCard(p, cfg) {
+  const v = signalWord(p.signal);
+  const t = cfg.signal_threshold;
+  return `<article class="card">
+    <div class="sig-head">
+      <span class="sig-sym">${p.symbol}</span>
+      <span class="sig-price num">${fmtNum(p.close_price)} USDT</span>
+    </div>
+    <div class="verdict ${v.cls}">${v.text}</div>
+    <div class="meter">
+      ${meterRow("Giảm", p.prob_down, "down", t)}
+      ${meterRow("Đứng yên", p.prob_flat, "flat", null)}
+      ${meterRow("Tăng", p.prob_up, "up", t)}
+      <p class="meter-note">Vạch đen = ngưỡng ${fmtPct(t, 0)}. Xác suất chưa vượt vạch thì hệ thống đứng ngoài —
+      đó là trạng thái mặc định, không phải lỗi. Nến đóng ${shortTime(p.bar_close_time)} UTC.</p>
+    </div>
+  </article>`;
+}
+
+function tile(k, v, n, tone) {
+  const cls = tone ? ` ${tone}` : "";
+  const small = String(v).length > 8 ? " small" : "";
+  return `<div class="tile${cls}"><div class="k">${k}</div><div class="v num${small}">${v}</div><div class="n num">${n}</div></div>`;
+}
+
+async function load() {
+  const cfg = await getJSON("/api/config");
+
+  try {
+    const health = await getJSON("/api/health");
+    const rows = health.data.filter(r => r.bars > 0);
+    const worst = rows.length ? Math.max(...rows.map(r => r.minutes_behind ?? 1e9)) : null;
+    const dot = document.getElementById("health-dot");
+    const txt = document.getElementById("health-text");
+    if (worst === null) { dot.className = "dot"; txt.textContent = "chưa có dữ liệu"; }
+    else if (worst > 180) { dot.className = "dot stale"; txt.textContent = `dữ liệu trễ ${Math.round(worst)} phút`; }
+    else { dot.className = "dot live"; txt.textContent = `dữ liệu mới nhất cách ${Math.round(worst)} phút`; }
+  } catch (e) { document.getElementById("health-text").textContent = "không đọc được trạng thái"; }
+
+  const signalsEl = document.getElementById("signals");
+  const cards = [];
+  const liveTiles = [];
+  const paperTiles = [];
+  const historyRows = [];
+  const overrideNotes = [];
+  let caveatText = "";
+
+  for (const symbol of cfg.symbols) {
+    const interval = "1h";
+    try {
+      const p = await getJSON(`/api/predict?symbol=${symbol}&interval=${interval}`);
+      cards.push(signalCard(p, cfg));
+    } catch (e) {
+      const noModel = /no model in the registry/i.test(e.message);
+      const note = noModel
+        ? "Chưa có model cho coin này. Model chỉ được lưu khi vượt cổng kiểm — ETHUSDT hiện thất bại ở mọi ngưỡng nên không có model, và đó là kết quả đúng chứ không phải lỗi."
+        : `Chưa dự đoán được: ${String(e.message).slice(0, 160)}`;
+      cards.push(`<article class="card"><div class="sig-head"><span class="sig-sym">${symbol}</span></div>
+        <div class="verdict idle">KHÔNG CÓ MODEL</div>
+        <p class="meter-note">${note}</p></article>`);
+    }
+
+    try {
+      const m = await getJSON(`/api/metrics?symbol=${symbol}&interval=${interval}`);
+      caveatText = m.caveat;
+      if (m.model && m.model.override_reason) {
+        overrideNotes.push(`${symbol}: model đã bị ghi đè cổng kiểm — cổng nói "${m.model.gate_decision}" (${m.model.gate_reason}). Lý do ghi đè: ${m.model.override_reason}`);
+      }
+
+      const live = m.live;
+      liveTiles.push(tile(
+        `${symbol} — đúng hướng khi ra tín hiệu`,
+        live.signal_accuracy === null ? "chưa đủ" : fmtPct(live.signal_accuracy),
+        `n = ${live.n_signals} tín hiệu đã chấm`,
+        live.signal_accuracy === null ? null : (live.signal_accuracy > 0.5 ? "pos" : "neg")
+      ));
+      liveTiles.push(tile(
+        `${symbol} — đúng trên mọi nến`,
+        live.accuracy === null ? "chưa đủ" : fmtPct(live.accuracy),
+        `n = ${live.n_scored} nến đã chấm`, null
+      ));
+
+      const paper = m.paper;
+      paperTiles.push(tile(
+        `${symbol} — vốn ảo`,
+        fmtNum(paper.equity, 0),
+        `${paper.n_trades} lệnh đã đóng`,
+        paper.n_trades ? (paper.equity >= 10000 ? "pos" : "neg") : null
+      ));
+      paperTiles.push(tile(
+        `${symbol} — lãi/lỗ`,
+        (paper.total_pnl_usd >= 0 ? "+" : "") + fmtNum(paper.total_pnl_usd, 0),
+        paper.win_rate === null ? "chưa có lệnh đóng" : `thắng ${fmtPct(paper.win_rate)}`,
+        paper.n_trades ? (paper.total_pnl_usd >= 0 ? "pos" : "neg") : null
+      ));
+    } catch (e) { /* metrics unavailable for this symbol */ }
+
+    try {
+      const h = await getJSON(`/api/history?symbol=${symbol}&interval=${interval}&limit=60`);
+      for (const r of h.rows) {
+        const v = signalWord(r.signal);
+        const outcome = r.is_correct === null || r.is_correct === undefined
+          ? '<span class="pill idle">chưa chấm</span>'
+          : (r.is_correct ? '<span class="hit">đúng</span>' : '<span class="miss">sai</span>');
+        historyRows.push(`<tr>
+          <td class="num">${shortTime(r.bar_close_time)}</td>
+          <td>${r.symbol}</td>
+          <td><span class="pill ${v.cls}">${v.text}</span></td>
+          <td class="r num">${fmtPct(r.prob_down)}</td>
+          <td class="r num">${fmtPct(r.prob_flat)}</td>
+          <td class="r num">${fmtPct(r.prob_up)}</td>
+          <td class="r num">${fmtNum(r.close_price)}</td>
+          <td class="r num">${r.actual_return === null || r.actual_return === undefined ? "—" : fmtPct(r.actual_return, 2)}</td>
+          <td>${outcome}</td>
+        </tr>`);
+      }
+    } catch (e) { /* history unavailable */ }
+  }
+
+  signalsEl.innerHTML = cards.join("");
+  document.getElementById("live-stats").innerHTML = liveTiles.join("") ||
+    '<div class="empty">Chưa có dự đoán nào được chấm điểm. Chạy scheduler và đợi đủ horizon.</div>';
+  document.getElementById("paper-stats").innerHTML = paperTiles.join("") ||
+    '<div class="empty">Chưa có lệnh paper nào.</div>';
+  document.getElementById("history").innerHTML = historyRows.join("") ||
+    '<tr><td colspan="9" class="empty">Chưa có dự đoán nào được ghi.</td></tr>';
+
+  const overrideHtml = overrideNotes.length
+    ? `<br><br><strong>Cảnh báo cổng kiểm:</strong> ${overrideNotes.join(" · ")}`
+    : "";
+  document.getElementById("caveat").innerHTML =
+    `<strong>Đọc trước khi tin số:</strong> ${caveatText || "Bằng chứng backtest là 1 cấu hình đạt trên 28 cấu hình đã xét — xấp xỉ mức may rủi. ETHUSDT thất bại ở mọi ngưỡng. Xem docs/findings.md."}${overrideHtml}`;
+
+  document.getElementById("footer").textContent =
+    `Horizon ${cfg.horizon_bars["1h"]} nến · ngưỡng ${(cfg.signal_threshold * 100).toFixed(0)}% · phí ${(cfg.taker_fee * 100).toFixed(3)}%/chiều + trượt giá ${(cfg.slippage * 100).toFixed(3)}% · không có kết nối giao dịch thật`;
+}
+
+load().catch(err => {
+  document.getElementById("signals").innerHTML = `<div class="empty">Không tải được API: ${err.message}</div>`;
+});
+setInterval(() => load().catch(() => {}), 60_000);
+</script>
+</body>
+</html>
