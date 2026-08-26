@@ -11,7 +11,7 @@ import typer
 from cryptopred.config import load_config
 from cryptopred.dataset.builder import dataset_path
 from cryptopred.ingest.storage import ParquetStore
-from cryptopred.models.meta import MetaConfig, walk_forward_meta
+from cryptopred.models.meta import MetaConfig, signals_from_proba, walk_forward_meta
 from cryptopred.models.meta_report import format_meta_report, score_signals
 from cryptopred.models.train import TrainConfig
 
@@ -83,9 +83,18 @@ def run(
         bars, index, result["final_signals"], horizon=horizon, forward_return=forward
     )
 
+    # The honest benchmark is not the loose primary the stack filters — that is
+    # easy to beat — but one model alone at the threshold already in production.
+    benchmark_threshold = cfg.strategy.signal_threshold
+    benchmark_signals = signals_from_proba(result["primary_proba"], benchmark_threshold)
+    benchmark_scored = score_signals(
+        bars, index, benchmark_signals, horizon=horizon, forward_return=forward
+    )
+
     report = format_meta_report(
         primary_scored, meta_scored, symbol=symbol, horizon=horizon,
         config=meta_config, folds=result["folds"],
+        benchmark=benchmark_scored, benchmark_threshold=benchmark_threshold,
     )
     typer.echo(report)
 

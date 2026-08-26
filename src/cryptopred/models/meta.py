@@ -53,6 +53,14 @@ class MetaConfig:
     # Weight each meta-label by how much money the trade made or lost, so the
     # secondary cares about a 3% winner more than a 0.01% scratch.
     weight_by_magnitude: bool = True
+    # Fit a separate secondary per side. With one shared model, long signals
+    # outnumber short ones several to one in a rising sample, and the secondary
+    # learns "shorts do not work" — which is the sample's drift, not a rule.
+    # Separate models let each side be judged against its own history.
+    per_side: bool = True
+    # A side with fewer than this many simulated trades cannot support its own
+    # model; it falls back to the shared one rather than fitting noise.
+    min_side_rows: int = 300
 
 
 def signals_from_proba(proba: np.ndarray, threshold: float) -> np.ndarray:
@@ -170,8 +178,33 @@ def train_secondary(
     return lgb.train(params, dataset, num_boost_round=config.secondary.num_boost_round)
 
 
+def train_secondary_per_side(
+    features: pd.DataFrame, labels: pd.Series, weights: pd.Series, config: MetaConfig
+) -> dict[int, lgb.Booster]:
+    """One secondary per side, plus a shared fallback.
+
+    Key `0` holds the shared model, used for a side with too little history of
+    its own. Keys `1` and `-1` hold the per-side models where the data supports
+    them.
+    """
+    models: dict[int, lgb.Booster] = {0: train_secondary(features, labels, weights, config)}
+    if not config.per_side:
+        return models
+
+    for side in (1, -1):
+        rows = features["primary_signal"] == side
+        if rows.sum() < config.min_side_rows:
+            continue
+        if labels[rows.to_numpy()].nunique() < 2:
+            continue
+        models[side] = train_secondary(
+            features[rows], labels[rows.to_numpy()], weights[rows.to_numpy()], config
+        )
+    return models
+
+
 def apply_meta(
-    booster: lgb.Booster,
+    boosters: dict[int, lgb.Booster] | lgb.Booster,
     dataset: pd.DataFrame,
     primary_proba: np.ndarray,
     meta_features: list[str],
@@ -197,7 +230,17 @@ def apply_meta(
     features["primary_confidence"] = primary_proba[fired].max(axis=1)
     features["primary_signal"] = primary_signals[fired]
 
-    scores = np.asarray(booster.predict(features[meta_features]))
+    if not isinstance(boosters, dict):
+        boosters = {0: boosters}
+
+    sides = primary_signals[fired]
+    scores = np.empty(len(features))
+    for side in (1, -1):
+        rows = sides == side
+        if not rows.any():
+            continue
+        model = boosters.get(side, boosters[0])
+        scores[rows] = np.asarray(model.predict(features.loc[rows, meta_features]))
     meta_prob[fired] = scores
 
     take = fired.copy()
@@ -225,6 +268,7 @@ def walk_forward_meta(
 
     final_signals: list[np.ndarray] = []
     primary_signals: list[np.ndarray] = []
+    primary_probas: list[np.ndarray] = []
     indices: list[pd.Index] = []
     folds: list[dict[str, Any]] = []
 
@@ -242,6 +286,7 @@ def walk_forward_meta(
             primary = signals_from_proba(result.proba, config.primary_threshold)
             final_signals.append(primary)
             primary_signals.append(primary)
+            primary_probas.append(result.proba)
             indices.append(test.index)
             folds.append(
                 {"fold": fold_id, "meta_trained": False, "n_meta_rows": 0,
@@ -249,15 +294,16 @@ def walk_forward_meta(
             )
             continue
 
-        booster = train_secondary(meta_x, meta_y, meta_w, config)
+        boosters = train_secondary_per_side(meta_x, meta_y, meta_w, config)
         result = train_fold(train, test, config.primary)
         primary = signals_from_proba(result.proba, config.primary_threshold)
         final, _ = apply_meta(
-            booster, test, result.proba, list(meta_x.columns), config
+            boosters, test, result.proba, list(meta_x.columns), config
         )
 
         final_signals.append(final)
         primary_signals.append(primary)
+        primary_probas.append(result.proba)
         indices.append(test.index)
         folds.append(
             {
@@ -267,6 +313,7 @@ def walk_forward_meta(
                 "meta_positive_rate": float(meta_y.mean()),
                 "n_primary": int((primary != 0).sum()),
                 "n_final": int((final != 0).sum()),
+                "per_side_models": sorted(k for k in boosters if k != 0),
             }
         )
 
@@ -275,6 +322,9 @@ def walk_forward_meta(
         "index": index,
         "final_signals": np.concatenate(final_signals),
         "primary_signals": np.concatenate(primary_signals),
+        # Kept so the stack can be judged against the best simple configuration,
+        # not only against the loose primary it happens to filter.
+        "primary_proba": np.concatenate(primary_probas),
         "folds": folds,
         "config": config,
     }

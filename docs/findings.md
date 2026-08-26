@@ -185,6 +185,74 @@ plus 7 on the 1m timeframe). The multiple-comparison caveat gets worse with ever
 one of them, which is precisely why the by-side split matters: it is a structural
 test that noise cannot pass by luck, not another cell in a search grid.
 
+## Meta-labelling: the technique works, the stack does not pay for itself
+
+The idea: run the primary model loose so it produces many signals, simulate the
+trade each one would have made, and train a second model on those outcomes to
+decide which signals are worth taking. Two questions, two models — "which way?"
+and "is this trade worth making after costs?" — because a bar can be genuinely
+more likely to rise and still be a bad trade.
+
+Every primary probability the secondary learns from comes from an inner purged
+walk-forward split inside the training window. Skipping that would be fatal:
+trained on in-sample primary output, the secondary learns to trust a confidence
+that does not exist in production, concludes "always take the trade", and
+becomes an expensive no-op that only reveals itself with real money.
+
+**The technique demonstrably works.** Starting from a loose primary at threshold
+0.50, adding the filter:
+
+| | Primary alone | With meta filter |
+|---|---|---|
+| Signals | 14,320 | 3,789 |
+| Sign accuracy | 55.22% | **57.30%** |
+| Total return | +36.6% | **+48.2%** |
+| Max drawdown | −48.4% | **−22.4%** |
+| Sharpe | 0.33 | **0.53** |
+| Return at 2x costs | **−40.8%** | **+18.8%** |
+| Survives 2x costs | no | **yes** |
+
+It converted a doubled-cost failure into a survivor and halved the drawdown.
+That is real, and it is what learning from simulated outcomes is supposed to do.
+
+**One failure mode, found and fixed.** With a single shared secondary, the filter
+made the strategy *more* one-sided: shorts fell from 1,106 trades to 408 and lost
+696 USDT. Long signals outnumber short ones several to one in a rising sample, so
+the shared model simply learned "shorts do not work" — fitting the sample's drift
+rather than any rule. Training a separate secondary per side fixed it: shorts
+returned to 869 trades winning 58.2% and earning +465 USDT, and the directional
+verdict flipped back to two-sided.
+
+**And yet it does not earn its complexity.** Against the honest benchmark — one
+model alone at the production threshold of 0.60, which is what would ship
+otherwise:
+
+| | Two-model stack | Single model at 0.60 |
+|---|---|---|
+| Signals | 3,789 | **4,295** |
+| Total return | +48.2% | **+61.8%** |
+| Max drawdown | −22.4% | **−19.1%** |
+| Return at 2x costs | +18.8% | **+25.9%** |
+| Directional | two-sided | two-sided |
+
+The simple model wins on every axis, including signal count. The reason is
+visible once stated: the secondary's job overlaps the threshold's job. Both
+answer "is this signal confident enough to act on", and a scalar threshold does
+it with one model and no extra fitting. The second model rediscovers the
+primary's own confidence ranking and charges an extra layer of overfitting risk
+for the privilege.
+
+Note the gate that produced this answer was itself broken at first. The
+benchmark was computed and then never reached the verdict function, so the
+report printed "beats the simple production model" while comparing against
+nothing. `tests/test_meta_report.py` now fails if the benchmark stops being
+passed through.
+
+**What would make a second model pay off** is giving it a job the threshold
+cannot do — position sizing rather than filtering. A probability of profit is a
+natural bet size, and varying size is something no threshold can express. That is
+a different experiment and it has not been run.
+
 ## Decision
 
 Defaults stay at the 24-hour horizon and a 0.60 threshold. That is now the only

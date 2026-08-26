@@ -1,0 +1,89 @@
+from cryptopred.models.meta_report import _verdict
+from cryptopred.paper.replay import SideStats
+
+
+def _scored(total_return, survives=True, decision="TWO-SIDED", drawdown=-0.2):
+    return {
+        "total_return": total_return,
+        "max_drawdown": drawdown,
+        "survives_doubled_costs": survives,
+        "two_sided": {"decision": decision, "reason": "because"},
+        "n_signals": 1000,
+        "coverage": 0.08,
+        "sign_accuracy": 0.57,
+        "win_rate": 0.53,
+        "sharpe": 0.5,
+        "n_trades": 1000,
+        "doubled_cost_return": 0.1,
+        "long": SideStats(1000, 0.55, 100.0, 0.001),
+        "short": SideStats(300, 0.55, 30.0, 0.001),
+    }
+
+
+def test_no_go_when_doubled_costs_kill_it():
+    v = _verdict(_scored(0.1), _scored(0.5, survives=False))
+    assert v.startswith("NO-GO")
+
+
+def test_no_go_when_one_sided():
+    v = _verdict(_scored(0.1), _scored(0.5, decision="ONE-SIDED"))
+    assert "one side only" in v
+
+
+def test_no_benefit_when_it_loses_to_its_own_primary():
+    v = _verdict(_scored(0.6), _scored(0.4))
+    assert "does not beat the primary" in v
+
+
+def test_no_benefit_when_it_loses_to_the_simple_model():
+    """Beating a deliberately loose primary is not evidence: the stack must also
+    beat one model at the production threshold."""
+    v = _verdict(_scored(0.30), _scored(0.48), benchmark=_scored(0.62))
+    assert "NO BENEFIT OVER THE SIMPLE MODEL" in v
+
+
+def test_improvement_requires_clearing_both_comparisons():
+    v = _verdict(_scored(0.30), _scored(0.70), benchmark=_scored(0.62))
+    assert v.startswith("IMPROVEMENT")
+
+
+def test_benchmark_is_optional():
+    v = _verdict(_scored(0.30), _scored(0.48))
+    assert v.startswith("IMPROVEMENT")
+
+
+def test_report_prints_the_benchmark_line_when_given_one():
+    """Regression: the benchmark was computed but never reached the report, so a
+    gate that looked active was doing nothing."""
+    from cryptopred.models.meta_report import format_meta_report
+
+    class _Cfg:
+        primary_threshold = 0.5
+        meta_threshold = 0.65
+
+    text = format_meta_report(
+        _scored(0.30),
+        _scored(0.48),
+        symbol="BTCUSDT",
+        horizon=24,
+        config=_Cfg(),
+        folds=[],
+        benchmark=_scored(0.62),
+        benchmark_threshold=0.60,
+    )
+    assert "BENCHMARK" in text
+    assert "NO BENEFIT OVER THE SIMPLE MODEL" in text
+
+
+def test_report_omits_the_benchmark_line_when_absent():
+    from cryptopred.models.meta_report import format_meta_report
+
+    class _Cfg:
+        primary_threshold = 0.5
+        meta_threshold = 0.65
+
+    text = format_meta_report(
+        _scored(0.30), _scored(0.48), symbol="BTCUSDT", horizon=24,
+        config=_Cfg(), folds=[],
+    )
+    assert "BENCHMARK" not in text

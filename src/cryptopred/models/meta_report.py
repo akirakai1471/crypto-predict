@@ -17,7 +17,15 @@ from cryptopred.backtest.engine import CostModel, backtest
 from cryptopred.paper.replay import SideStats, two_sided_verdict
 
 
-def _side_stats_from_trades(trades: pd.DataFrame, direction: int) -> SideStats:
+def _side_stats_from_trades(
+    trades: pd.DataFrame, direction: int, notional: float
+) -> SideStats:
+    """Per-side stats with PnL in USDT.
+
+    `notional` is the capital committed per trade. Summing raw returns instead
+    would produce a number in no unit at all, which is how a report ends up
+    labelling a dimensionless figure "USDT" and misleading its own author.
+    """
     if trades.empty:
         return SideStats(n=0, win_rate=None, total_pnl=0.0, avg_return=None)
     side = trades[trades["direction"] == direction]
@@ -26,8 +34,7 @@ def _side_stats_from_trades(trades: pd.DataFrame, direction: int) -> SideStats:
     return SideStats(
         n=int(len(side)),
         win_rate=float((side["net_return"] > 0).mean()),
-        # PnL is expressed in return units here; the replay reports USDT.
-        total_pnl=float(side["net_return"].sum()),
+        total_pnl=float(side["net_return"].sum() * notional),
         avg_return=float(side["net_return"].mean()),
     )
 
@@ -39,6 +46,7 @@ def score_signals(
     horizon: int,
     forward_return: np.ndarray | None = None,
     costs: CostModel | None = None,
+    starting_capital: float = 10_000.0,
 ) -> dict[str, Any]:
     """Backtest a signal array and split the result by side."""
     costs = costs or CostModel()
@@ -57,8 +65,11 @@ def score_signals(
         ),
     )
 
-    long_s = _side_stats_from_trades(base.trades, 1)
-    short_s = _side_stats_from_trades(base.trades, -1)
+    # Overlapping positions share capital: each trade gets 1/horizon of it,
+    # matching how the paper trader sizes real positions.
+    notional = starting_capital / max(horizon, 1)
+    long_s = _side_stats_from_trades(base.trades, 1, notional)
+    short_s = _side_stats_from_trades(base.trades, -1, notional)
 
     sign_acc = None
     if forward_return is not None:
@@ -92,6 +103,8 @@ def format_meta_report(
     horizon: int,
     config: Any,
     folds: list[dict[str, Any]],
+    benchmark: dict[str, Any] | None = None,
+    benchmark_threshold: float | None = None,
 ) -> str:
     lines = [
         "=" * 74,
@@ -148,11 +161,34 @@ def format_meta_report(
                 f"primary used alone with {fold['n_primary']:,} signals"
             )
 
-    lines += ["", "=" * 74, f"VERDICT: {_verdict(primary, meta)}", "=" * 74]
+    if benchmark is not None:
+        lines += [
+            "",
+            "BENCHMARK — one model alone at the production threshold "
+            f"{benchmark_threshold:.2f}",
+            f"  signals {benchmark['n_signals']:,}   "
+            f"return {benchmark['total_return']:+.1%}   "
+            f"drawdown {benchmark['max_drawdown']:.1%}   "
+            f"at 2x costs {benchmark['doubled_cost_return']:+.1%}   "
+            f"{benchmark['two_sided']['decision']}",
+        ]
+
+    lines += ["", "=" * 74, f"VERDICT: {_verdict(primary, meta, benchmark)}", "=" * 74]
     return "\n".join(lines)
 
 
-def _verdict(primary: dict[str, Any], meta: dict[str, Any]) -> str:
+def _verdict(
+    primary: dict[str, Any],
+    meta: dict[str, Any],
+    benchmark: dict[str, Any] | None = None,
+) -> str:
+    """Beating the primary it filters is necessary but not sufficient.
+
+    A loose primary is easy to improve on. The question that decides whether the
+    second model is worth its complexity is whether the stack beats the best
+    *simple* configuration already available — otherwise the honest answer is to
+    ship one model with a tighter threshold.
+    """
     if not meta["survives_doubled_costs"]:
         return "NO-GO — the filtered strategy does not survive doubled costs"
     if meta["two_sided"]["decision"] == "ONE-SIDED":
@@ -162,12 +198,18 @@ def _verdict(primary: dict[str, Any], meta: dict[str, Any]) -> str:
             "NO BENEFIT — the second model does not beat the primary it filters; "
             "the extra complexity buys nothing"
         )
+    if benchmark is not None and meta["total_return"] <= benchmark["total_return"]:
+        return (
+            f"NO BENEFIT OVER THE SIMPLE MODEL — the stack returns "
+            f"{meta['total_return']:+.1%} against {benchmark['total_return']:+.1%} for a "
+            "single model at the production threshold. Two models are not worth it here"
+        )
     if meta["max_drawdown"] < primary["max_drawdown"]:
         return (
             "MIXED — higher return but a deeper drawdown than the primary alone; "
             "the filter traded risk for return rather than removing bad trades"
         )
-    return "IMPROVEMENT — higher return, no worse drawdown, and still two-sided"
+    return "IMPROVEMENT — beats both its own primary and the simple production model"
 
 
 def _row(label: str, left: Any, right: Any, fmt: str) -> str:

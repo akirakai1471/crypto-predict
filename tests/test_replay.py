@@ -186,3 +186,16 @@ def test_unproven_when_too_few_shorts():
 def test_no_trades_case():
     v = two_sided_verdict(_side(0, None, 0.0), _side(0, None, 0.0))
     assert v["decision"] == "NO TRADES"
+
+
+def test_one_sided_when_shorts_win_often_but_earn_nothing():
+    """A high win rate with no profit means small wins and large losses — the
+    short side is being carried, not contributing."""
+    v = two_sided_verdict(_side(3000, 0.55, 5000.0), _side(1500, 0.571, 20.0))
+    assert v["decision"] == "ONE-SIDED"
+    assert "small wins and large losses" in v["reason"]
+
+
+def test_two_sided_needs_a_material_short_contribution():
+    v = two_sided_verdict(_side(3000, 0.55, 5000.0), _side(1100, 0.551, 800.0))
+    assert v["decision"] == "TWO-SIDED"

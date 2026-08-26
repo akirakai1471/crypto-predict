@@ -204,3 +204,90 @@ def test_meta_never_invents_a_signal_the_primary_did_not_make():
     primary, final = result["primary_signals"], result["final_signals"]
     taken = final != 0
     assert (final[taken] == primary[taken]).all()
+
+
+def test_per_side_training_produces_a_model_for_each_direction():
+    from cryptopred.models.meta import train_secondary_per_side
+
+    bars = _bars(6000)
+    dataset = _dataset(bars)
+    cfg = MetaConfig(
+        primary=TrainConfig(num_boost_round=20),
+        secondary=TrainConfig(num_boost_round=20, min_data_in_leaf=20),
+        inner_splits=3,
+        primary_threshold=0.4,
+        per_side=True,
+        min_side_rows=50,
+    )
+    x, y, w = build_meta_training_set(dataset, bars, horizon=4, config=cfg)
+    models = train_secondary_per_side(x, y, w, cfg)
+
+    assert 0 in models                      # shared fallback always exists
+    assert set(models) <= {0, 1, -1}
+    assert len(models) > 1                  # at least one side got its own model
+
+
+def test_per_side_disabled_returns_only_the_shared_model():
+    from cryptopred.models.meta import train_secondary_per_side
+
+    bars = _bars(4000)
+    dataset = _dataset(bars)
+    cfg = MetaConfig(
+        primary=TrainConfig(num_boost_round=20),
+        secondary=TrainConfig(num_boost_round=20, min_data_in_leaf=20),
+        inner_splits=3,
+        per_side=False,
+    )
+    x, y, w = build_meta_training_set(dataset, bars, horizon=4, config=cfg)
+    assert set(train_secondary_per_side(x, y, w, cfg)) == {0}
+
+
+def test_a_side_with_too_little_history_falls_back_to_shared():
+    from cryptopred.models.meta import train_secondary_per_side
+
+    bars = _bars(4000)
+    dataset = _dataset(bars)
+    cfg = MetaConfig(
+        primary=TrainConfig(num_boost_round=20),
+        secondary=TrainConfig(num_boost_round=20, min_data_in_leaf=20),
+        inner_splits=3,
+        per_side=True,
+        min_side_rows=10_000,       # nothing can clear this
+    )
+    x, y, w = build_meta_training_set(dataset, bars, horizon=4, config=cfg)
+    assert set(train_secondary_per_side(x, y, w, cfg)) == {0}
+
+
+def test_apply_meta_accepts_a_bare_booster_for_backwards_compatibility():
+    from cryptopred.models.meta import apply_meta, train_secondary
+
+    bars = _bars(4000)
+    dataset = _dataset(bars)
+    cfg = MetaConfig(
+        primary=TrainConfig(num_boost_round=20),
+        secondary=TrainConfig(num_boost_round=20, min_data_in_leaf=20),
+        inner_splits=3,
+    )
+    x, y, w = build_meta_training_set(dataset, bars, horizon=4, config=cfg)
+    booster = train_secondary(x, y, w, cfg)
+
+    rng = np.random.default_rng(0)
+    proba = rng.dirichlet(np.ones(3), len(dataset))
+    final, meta_prob = apply_meta(booster, dataset, proba, list(x.columns), cfg)
+    assert len(final) == len(dataset)
+    assert np.isnan(meta_prob).any()        # skipped rows were never scored
+
+
+def test_walk_forward_meta_returns_primary_probabilities():
+    """Needed so the stack can be scored against a tighter simple threshold."""
+    bars = _bars(6000)
+    dataset = _dataset(bars)
+    cfg = MetaConfig(
+        primary=TrainConfig(num_boost_round=20),
+        secondary=TrainConfig(num_boost_round=20, min_data_in_leaf=20),
+        inner_splits=3,
+    )
+    result = walk_forward_meta(dataset, bars, horizon=4, n_splits=3, config=cfg)
+    proba = result["primary_proba"]
+    assert proba.shape == (len(result["index"]), 3)
+    assert np.allclose(proba.sum(axis=1), 1.0)

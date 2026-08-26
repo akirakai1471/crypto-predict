@@ -113,6 +113,38 @@ vô nghĩa** — sửa rò rỉ trước, đừng train.
    chứng minh ngược lại.
 6. Mọi tỉ lệ hiển thị kèm cỡ mẫu.
 
+## Meta-labeling: model thứ hai học từ kết quả mô phỏng
+
+```bash
+uv run cryptopred-meta run --symbol BTCUSDT --primary-threshold 0.50 --meta-threshold 0.65
+```
+
+Model chính bắn rộng, mô phỏng lệnh, rồi model phụ học từ lời/lỗ thật của từng
+lệnh để lọc. Nhãn cho model phụ **bắt buộc** lấy từ nested CV bên trong tập train
+— nếu lấy từ dự đoán in-sample, model phụ học "lệnh nào cũng nên vào" và trở
+thành đồ trang trí, chỉ lộ ra khi mất tiền thật.
+
+**Kỹ thuật này chạy được, đo được:** trên nền primary 0.50, nó biến −40.8% ở test
+phí gấp đôi thành **+18.8%**, giảm nửa drawdown, sign accuracy 55.22% → 57.30%.
+
+**Nhưng không đáng công.** So với model đơn ở ngưỡng 0.60 — thứ sẽ ship nếu không
+có nó:
+
+| | 2 model | 1 model @0.60 |
+|---|---|---|
+| Tín hiệu | 3.789 | **4.295** |
+| Lợi nhuận | +48.2% | **+61.8%** |
+| Drawdown | −22.4% | **−19.1%** |
+| Phí gấp đôi | +18.8% | **+25.9%** |
+
+Model đơn thắng mọi trục. Lý do: việc của model phụ **trùng với việc của ngưỡng**
+— cả hai đều trả lời "tín hiệu này đủ chắc chưa", mà ngưỡng làm được bằng một
+con số, không cần fit thêm.
+
+Bẫy phải tránh: model phụ dùng chung cho cả 2 chiều sẽ học "short không ăn" (vì
+mẫu dữ liệu thị trường tăng), làm chiến lược lệch hẳn một chiều. Phải train
+**riêng từng chiều** — mặc định đã bật.
+
 ## Kiểm tra long/short — thứ mà tổng lợi nhuận che giấu
 
 ```bash

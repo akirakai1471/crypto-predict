@@ -113,17 +113,30 @@ def two_sided_verdict(long: SideStats, short: SideStats) -> dict[str, str]:
         return {
             "decision": "ONE-SIDED",
             "reason": (
-                f"shorts lost {short.total_pnl:,.0f} USDT at a {short.win_rate:.1%} win rate; "
-                "the profit comes from the long side alone, which in a rising market is "
-                "a directional bet rather than a prediction"
+                f"shorts lost {abs(short.total_pnl):,.0f} USDT at a {short.win_rate:.1%} "
+                "win rate; the profit comes from the long side alone, which in a rising "
+                "market is a directional bet rather than a prediction"
             ),
         }
+    # Check the win rate before the contribution: "below a coin flip" is the more
+    # specific diagnosis, and reporting the vaguer one would hide it.
     if short.win_rate is not None and short.win_rate < 0.5:
         return {
             "decision": "ONE-SIDED",
             "reason": (
                 f"shorts win only {short.win_rate:.1%} of the time — below a coin flip — "
                 f"and contribute {short.total_pnl:,.0f} USDT, which is noise, not edge"
+            ),
+        }
+    if long.total_pnl > 0 and short.total_pnl < 0.05 * long.total_pnl:
+        # Winning often while earning nothing means small wins and large losses:
+        # the short side is carried by the long side, not standing on its own.
+        return {
+            "decision": "ONE-SIDED",
+            "reason": (
+                f"shorts win {short.win_rate:.1%} but contribute only "
+                f"{short.total_pnl:,.0f} USDT against the long side's "
+                f"{long.total_pnl:,.0f}: small wins and large losses, not an edge"
             ),
         }
     return {
