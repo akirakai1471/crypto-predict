@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import typer
 
+from cryptopred.backtest.breakeven import analyse, format_table, round_trip_cost
 from cryptopred.backtest.runner import format_backtest, run_strategy_backtest
 from cryptopred.config import load_config
 from cryptopred.ingest.storage import ParquetStore
@@ -129,6 +130,38 @@ def train(
         typer.echo(
             f"  SAVED UNDER OVERRIDE — gate said {decision['decision']}: {decision['reason']}"
         )
+
+
+@app.command()
+def breakeven(
+    symbol: str = typer.Option("BTCUSDT", help="Symbol to analyse."),
+    interval: str = typer.Option("1h", help="Bar interval."),
+    accuracy: float = typer.Option(
+        None, help="Measured directional accuracy, to show the margin per horizon."
+    ),
+    maker: bool = typer.Option(
+        False, help="Price limit orders (0.02% fee, less slippage) instead of market orders."
+    ),
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+) -> None:
+    """How accurate a model must be for each horizon to pay for itself.
+
+    Run this BEFORE training on a new symbol or horizon. It needs no model and
+    answers the question that decides everything: is the move big enough to
+    cover the cost of capturing it?
+    """
+    cfg = load_config(config)
+    bars = ParquetStore(cfg.data.root / "raw").read("klines", symbol, interval)
+    if bars.empty:
+        typer.echo(f"No bars for {symbol} {interval}. Run `cryptopred-ingest klines` first.")
+        raise typer.Exit(code=1)
+
+    cost = round_trip_cost(0.0002, 0.0001) if maker else round_trip_cost(
+        cfg.strategy.taker_fee, cfg.strategy.slippage
+    )
+    horizons = (1, 2, 4, 8, 12, 24, 48, 72, 168) if interval == "1h" else (1, 3, 5, 15, 30, 60)
+    results = analyse(bars, horizons=horizons, cost=cost)
+    typer.echo(format_table(results, interval=interval, symbol=symbol, measured_accuracy=accuracy))
 
 
 @app.command()

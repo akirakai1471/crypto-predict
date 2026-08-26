@@ -53,6 +53,13 @@ Train + đánh giá walk-forward + backtest có phí:
 uv run cryptopred-model train --symbol BTCUSDT --interval 1h
 ```
 
+**Chạy cái này TRƯỚC KHI train coin/horizon mới** — nó không cần model và trả lời
+câu hỏi quyết định: biên độ có đủ trả phí không?
+
+```bash
+uv run cryptopred-model breakeven --symbol BTCUSDT --interval 1h --accuracy 0.589
+```
+
 Xem đánh đổi theo ngưỡng (chỉ để hiểu, chọn ngưỡng từ bảng này là overfit):
 
 ```bash
