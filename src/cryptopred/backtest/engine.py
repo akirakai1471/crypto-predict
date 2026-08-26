@@ -99,8 +99,10 @@ def backtest(
         )
 
     trades = pd.DataFrame(rows)
-    equity = _build_equity(trades, index)
+    equity, exposure = _build_equity(trades, index, opens, horizon, costs, bar_hours)
     summary = _summarise(trades, equity, index)
+    summary["max_exposure"] = float(exposure.max()) if len(exposure) else 0.0
+    summary["avg_exposure"] = float(exposure.mean()) if len(exposure) else 0.0
     return BacktestResult(trades=trades, equity=equity, summary=summary)
 
 
@@ -110,18 +112,60 @@ def _bar_hours(index: pd.DatetimeIndex) -> float:
     return float((index[1] - index[0]).total_seconds() / 3600.0)
 
 
-def _build_equity(trades: pd.DataFrame, index: pd.DatetimeIndex) -> pd.Series:
-    """Equity curve stamped at each trade's exit, forward-filled over the index."""
-    equity = pd.Series(1.0, index=index, dtype="float64")
-    if trades.empty:
-        return equity
+def _build_equity(
+    trades: pd.DataFrame,
+    index: pd.DatetimeIndex,
+    opens: np.ndarray,
+    horizon: int,
+    costs: CostModel,
+    bar_hours: float,
+) -> tuple[pd.Series, pd.Series]:
+    """Portfolio equity from per-bar exposure.
 
-    ordered = trades.sort_values("exit_time")
-    curve = (1 + ordered["net_return"]).cumprod()
-    stamped = pd.Series(curve.to_numpy(), index=ordered["exit_time"].to_numpy())
-    # Several trades can close on the same bar; keep the last.
-    stamped = stamped[~stamped.index.duplicated(keep="last")]
-    return stamped.reindex(index).ffill().fillna(1.0)
+    Fixed-horizon signals overlap: with a 24-bar horizon and a signal every bar,
+    24 positions are open at once. Compounding each trade's return serially, as
+    if the next trade started only after the previous closed, silently multiplies
+    the same capital many times over and produces impossible returns. Instead
+    every trade takes a `1/horizon` slice of capital, so full exposure is at most
+    100%, and the equity curve compounds the portfolio's return bar by bar.
+
+    Returns (equity, exposure).
+    """
+    n = len(index)
+    equity = pd.Series(1.0, index=index, dtype="float64")
+    exposure = pd.Series(0.0, index=index, dtype="float64")
+    if trades.empty or n < 2:
+        return equity, exposure
+
+    weight = 1.0 / max(horizon, 1)
+    position = np.zeros(n)
+    cash_flow = np.zeros(n)  # costs charged at entry, exit, and funding per bar
+
+    per_side_cost = costs.taker_fee + costs.slippage
+    funding_per_bar = costs.funding_rate * (bar_hours / costs.funding_interval_hours)
+
+    entry_pos = index.get_indexer(trades["entry_time"])
+    exit_pos = index.get_indexer(trades["exit_time"])
+    directions = trades["direction"].to_numpy()
+
+    for entry, exit_, direction in zip(entry_pos, exit_pos, directions, strict=True):
+        if entry < 0 or exit_ < 0:
+            continue
+        position[entry:exit_] += direction * weight
+        cash_flow[entry] += per_side_cost * weight
+        cash_flow[exit_] += per_side_cost * weight
+        # Longs pay funding, shorts receive it.
+        cash_flow[entry:exit_] += direction * funding_per_bar * weight
+
+    # Open-to-open returns: a position entered at the open of bar t is exposed to
+    # the move from that open to the next one.
+    bar_return = np.zeros(n)
+    bar_return[:-1] = opens[1:] / opens[:-1] - 1.0
+
+    portfolio_return = position * bar_return - cash_flow
+    equity = pd.Series(np.cumprod(1.0 + portfolio_return), index=index)
+    exposure = pd.Series(np.abs(position), index=index)
+    return equity, exposure
 
 
 def _summarise(

@@ -7,7 +7,7 @@ def test_default_config_loads():
     cfg = load_config()
     assert "BTCUSDT" in cfg.data.symbols
     assert "1h" in cfg.data.intervals
-    assert cfg.labels.horizon_bars["1h"] == 4
+    assert cfg.labels.horizon_bars["1h"] == 24
     assert cfg.labels.horizon_bars["1m"] == 5
 
 

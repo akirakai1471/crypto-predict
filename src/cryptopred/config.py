@@ -23,9 +23,21 @@ class DataConfig(BaseModel):
 class LabelConfig(BaseModel):
     """How 'up' and 'down' are defined."""
 
-    horizon_bars: dict[str, int] = Field(default_factory=lambda: {"1h": 4, "1m": 5})
+    # 1h bars are labelled 24 bars ahead, not 4: see docs/findings.md. The 4-bar
+    # horizon produces moves too small to clear a fixed 0.14% round-trip cost.
+    horizon_bars: dict[str, int] = Field(default_factory=lambda: {"1h": 24, "1m": 5})
     atr_period: int = 14
     band_k: float = 0.5
+
+
+class StrategyConfig(BaseModel):
+    """Trading rules applied on top of model probabilities."""
+
+    signal_threshold: float = 0.60
+    taker_fee: float = 0.0005
+    slippage: float = 0.0002
+    funding_rate: float = 0.0001
+    starting_capital: float = 10_000.0
 
 
 class FeatureConfig(BaseModel):
@@ -41,6 +53,7 @@ class Config(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     labels: LabelConfig = Field(default_factory=LabelConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
+    strategy: StrategyConfig = Field(default_factory=StrategyConfig)
 
     def raw_dir(self, kind: str) -> Path:
         """Directory holding raw downloads of a given kind (klines, funding, ...)."""

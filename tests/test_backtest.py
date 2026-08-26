@@ -145,3 +145,58 @@ def test_win_rate_and_profit_factor():
     assert result.summary["n_trades"] == 3
     assert 0.0 <= result.summary["win_rate"] <= 1.0
     assert result.summary["profit_factor"] > 0
+
+
+def test_overlapping_positions_do_not_compound_the_same_capital():
+    """Regression test for a real bug: with a multi-bar horizon and a signal on
+    every bar, positions overlap. Compounding each trade serially reuses the same
+    capital many times over and produced returns in the billions of percent."""
+    n = 200
+    idx = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC", name="open_time")
+    # steady 0.5% rise per bar
+    close = pd.Series(100 * 1.005 ** np.arange(n), index=idx)
+    bars = pd.DataFrame(
+        {"open": close.shift(1).fillna(100.0), "high": close, "low": close, "close": close},
+        index=idx,
+    )
+    signals = _signals([1] * n, idx)
+    free = CostModel(taker_fee=0.0, slippage=0.0, funding_rate=0.0)
+
+    result = backtest(bars, signals, horizon=24, costs=free)
+
+    # Fully invested in a market that rose ~2.7x, so equity must land near that,
+    # not orders of magnitude above it.
+    market_return = bars["open"].iloc[-1] / bars["open"].iloc[0] - 1
+    assert result.equity.iloc[-1] - 1 == pytest.approx(market_return, rel=0.2)
+    assert result.summary["max_exposure"] <= 1.0 + 1e-9
+
+
+def test_exposure_never_exceeds_full_capital():
+    n = 100
+    idx = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC", name="open_time")
+    close = pd.Series(np.linspace(100, 110, n), index=idx)
+    bars = pd.DataFrame(
+        {"open": close.shift(1).fillna(100.0), "high": close, "low": close, "close": close},
+        index=idx,
+    )
+    result = backtest(bars, _signals([1] * n, idx), horizon=10, costs=CostModel())
+    assert result.summary["max_exposure"] <= 1.0 + 1e-9
+
+
+def test_single_non_overlapping_trade_is_unchanged_by_the_portfolio_model():
+    """The fix must not alter the simple case the earlier tests pin down."""
+    bars = _bars([100, 110, 121])
+    signals = _signals([1, 0, 0], bars.index)
+    costs = CostModel(taker_fee=0.0005, slippage=0.0002, funding_rate=0.0)
+    result = backtest(bars, signals, horizon=1, costs=costs)
+
+    # The trade ledger nets both cost legs off the gross move...
+    assert result.trades.iloc[0]["net_return"] == pytest.approx(
+        (110 / 100 - 1) - 2 * (0.0005 + 0.0002), abs=1e-9
+    )
+    # ...while equity charges them at the bars where they are actually paid, so
+    # the exit fee applies to capital that has already grown. The gap is second
+    # order but the compounded figure is the truthful one.
+    side_cost = 0.0005 + 0.0002
+    expected_equity = (1 + (110 / 100 - 1) - side_cost) * (1 - side_cost)
+    assert result.equity.iloc[-1] == pytest.approx(expected_equity, abs=1e-9)

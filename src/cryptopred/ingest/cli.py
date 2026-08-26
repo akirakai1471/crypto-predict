@@ -170,3 +170,7 @@ def report(config: Path = typer.Option(None, help="Path to a YAML config file.")
                 f"{symbol} {interval}: {len(df):,} bars "
                 f"{df.index.min()} -> {df.index.max()}, gaps={len(gaps)}"
             )
+
+
+if __name__ == "__main__":
+    app()

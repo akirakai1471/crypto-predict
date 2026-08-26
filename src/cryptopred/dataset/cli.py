@@ -77,3 +77,7 @@ def build(config: Path = typer.Option(None, help="Path to a YAML config file."))
     store = ParquetStore(cfg.data.root / "raw")
     paths = run_build(cfg, store)
     typer.echo(f"\nWrote {len(paths)} dataset file(s).")
+
+
+if __name__ == "__main__":
+    app()

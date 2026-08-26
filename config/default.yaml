@@ -6,10 +6,20 @@ data:
 
 labels:
   horizon_bars:
-    "1h": 4    # predict direction 4 hours ahead
+    # 24h, not the original 4h: a 4-hour BTC move is too small to clear the
+    # 0.14% round-trip toll, and the 4h strategy dies at doubled costs.
+    # See docs/findings.md.
+    "1h": 24
     "1m": 5    # predict direction 5 minutes ahead
   atr_period: 14
   band_k: 0.5  # dead zone = 0.5 * ATR; moves smaller than this are labelled FLAT
+
+strategy:
+  # Middle of the robust plateau (0.55-0.70), not its peak: picking the peak
+  # fits the threshold to test-set noise. BTC-only evidence — see docs/findings.md.
+  signal_threshold: 0.60
+  taker_fee: 0.0005
+  slippage: 0.0002
 
 features:
   zscore_window: 200
