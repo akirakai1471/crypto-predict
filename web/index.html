@@ -152,6 +152,23 @@ section { margin-top: 30px; }
 }
 .meter-note { font-size: 12px; color: var(--muted); margin-top: 8px; }
 
+/* --- candle chart --- */
+.chart-card { padding: 16px 18px 12px; }
+.chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.chart-title { font-family: Archivo, sans-serif; font-weight: 600; font-size: 15px; }
+.chart-legend { font-size: 11.5px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; }
+.chart-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.swatch { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.swatch.hit { background: var(--up); }
+.swatch.miss { background: var(--down); }
+.swatch.pending { background: var(--idle); }
+.chart-wrap { overflow-x: auto; }
+.chart-wrap svg { display: block; width: 100%; min-width: 560px; height: auto; }
+.candle-up   { stroke: var(--up);   fill: var(--up); }
+.candle-down { stroke: var(--down); fill: var(--down); }
+.grid-line { stroke: var(--line-soft); stroke-width: 1; }
+.axis-text { fill: var(--muted); font-family: "IBM Plex Mono", monospace; font-size: 10px; }
+
 /* --- stat tiles --- */
 .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; }
 .tile .k { font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
@@ -214,6 +231,11 @@ a { color: var(--accent); }
   <section>
     <p class="eyebrow">Paper trading — tiền giả, không kết nối tài khoản sàn</p>
     <div class="grid stats" id="paper-stats"></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Biểu đồ giá và dự đoán đã chấm</p>
+    <div id="charts" class="grid" style="grid-template-columns: 1fr;"></div>
   </section>
 
   <section>
@@ -289,6 +311,76 @@ function tile(k, v, n, tone) {
   return `<div class="tile${cls}"><div class="k">${k}</div><div class="v num${small}">${v}</div><div class="n num">${n}</div></div>`;
 }
 
+function renderChart(symbol, candles, predictions) {
+  if (!candles.length) return "";
+
+  const W = 1100, H = 300;
+  const padL = 8, padR = 62, padT = 12, padB = 22;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
+  const highs = candles.map(c => c.high), lows = candles.map(c => c.low);
+  let hi = Math.max(...highs), lo = Math.min(...lows);
+  const pad = (hi - lo) * 0.06 || 1;
+  hi += pad; lo -= pad;
+
+  const x = i => padL + (i + 0.5) * (plotW / candles.length);
+  const y = v => padT + (hi - v) / (hi - lo) * plotH;
+  const bw = Math.max(1, (plotW / candles.length) * 0.62);
+
+  // horizontal grid plus a price axis on the right, so the candles have a scale
+  let grid = "", labels = "";
+  for (let k = 0; k <= 4; k++) {
+    const v = lo + (hi - lo) * k / 4;
+    const yy = y(v).toFixed(1);
+    grid += `<line class="grid-line" x1="${padL}" x2="${padL + plotW}" y1="${yy}" y2="${yy}"></line>`;
+    labels += `<text class="axis-text" x="${padL + plotW + 6}" y="${(+yy + 3).toFixed(1)}">${Math.round(v).toLocaleString("vi-VN")}</text>`;
+  }
+
+  let bars = "";
+  candles.forEach((c, i) => {
+    const cls = c.close >= c.open ? "candle-up" : "candle-down";
+    const top = y(Math.max(c.open, c.close)), bot = y(Math.min(c.open, c.close));
+    bars += `<line class="${cls}" x1="${x(i).toFixed(1)}" x2="${x(i).toFixed(1)}" y1="${y(c.high).toFixed(1)}" y2="${y(c.low).toFixed(1)}" stroke-width="1"></line>`
+         +  `<rect class="${cls}" x="${(x(i) - bw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1, bot - top).toFixed(1)}"></rect>`;
+  });
+
+  // predictions are keyed by the bar they were made on, so they land on the
+  // candle the model actually saw — not the candle it was predicting
+  const byTime = new Map(candles.map((c, i) => [c.time.slice(0, 13), i]));
+  let marks = "";
+  for (const pr of predictions) {
+    if (!pr.bar_close_time) continue;
+    const key = pr.bar_close_time.slice(0, 13);
+    if (!byTime.has(key)) continue;
+    const i = byTime.get(key);
+    const cls = pr.is_correct === null || pr.is_correct === undefined
+      ? "pending" : (pr.is_correct ? "hit" : "miss");
+    const fill = cls === "hit" ? "var(--up)" : cls === "miss" ? "var(--down)" : "var(--idle)";
+    const yy = pr.signal === -1 ? y(candles[i].high) - 7 : y(candles[i].low) + 7;
+    marks += `<circle cx="${x(i).toFixed(1)}" cy="${yy.toFixed(1)}" r="3" fill="${fill}"></circle>`;
+  }
+
+  const first = candles[0].time.replace("T", " ").slice(0, 16);
+  const last = candles[candles.length - 1].time.replace("T", " ").slice(0, 16);
+
+  return `<article class="card chart-card">
+    <div class="chart-head">
+      <span class="chart-title">${symbol}</span>
+      <span class="chart-legend">
+        <span><i class="swatch hit"></i>dự đoán đúng</span>
+        <span><i class="swatch miss"></i>sai</span>
+        <span><i class="swatch pending"></i>chưa chấm</span>
+      </span>
+    </div>
+    <div class="chart-wrap">
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Biểu đồ nến ${symbol} kèm dấu dự đoán">
+        ${grid}${bars}${marks}${labels}
+      </svg>
+    </div>
+    <p class="meter-note">${candles.length} nến · ${first} → ${last} UTC</p>
+  </article>`;
+}
+
 async function load() {
   const cfg = await getJSON("/api/config");
 
@@ -308,6 +400,7 @@ async function load() {
   const liveTiles = [];
   const paperTiles = [];
   const historyRows = [];
+  const chartCards = [];
   const overrideNotes = [];
   let caveatText = "";
 
@@ -381,6 +474,12 @@ async function load() {
         </tr>`);
       }
     } catch (e) { /* history unavailable */ }
+
+    try {
+      const c = await getJSON(`/api/candles?symbol=${symbol}&interval=${interval}&limit=180`);
+      const h = await getJSON(`/api/history?symbol=${symbol}&interval=${interval}&limit=300`);
+      chartCards.push(renderChart(symbol, c.rows, h.rows));
+    } catch (e) { /* candles unavailable for this symbol */ }
   }
 
   signalsEl.innerHTML = cards.join("");
@@ -388,6 +487,8 @@ async function load() {
     '<div class="empty">Chưa có dự đoán nào được chấm điểm. Chạy scheduler và đợi đủ horizon.</div>';
   document.getElementById("paper-stats").innerHTML = paperTiles.join("") ||
     '<div class="empty">Chưa có lệnh paper nào.</div>';
+  document.getElementById("charts").innerHTML = chartCards.join("") ||
+    '<div class="empty">Chưa có dữ liệu nến.</div>';
   document.getElementById("history").innerHTML = historyRows.join("") ||
     '<tr><td colspan="9" class="empty">Chưa có dự đoán nào được ghi.</td></tr>';
 
