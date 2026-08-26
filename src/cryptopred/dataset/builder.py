@@ -6,17 +6,39 @@ invents data; dropping costs a few hundred bars out of tens of thousands.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import TYPE_CHECKING
+
 import pandas as pd
 
 from cryptopred.config import FeatureConfig
 from cryptopred.features.pipeline import build_features
 from cryptopred.labels.barrier import make_labels
 
+if TYPE_CHECKING:
+    from cryptopred.config import Config
+
 TARGET_COLUMNS = ["label", "label_class", "forward_return", "band"]
 METADATA_COLUMNS = ["symbol", "interval"]
 
 # LightGBM wants contiguous class ids starting at zero.
 _CLASS_MAP = {-1.0: 0, 0.0: 1, 1.0: 2}
+
+
+def dataset_path(cfg: Config, symbol: str, interval: str, horizon: int | None = None) -> Path:
+    """Where a dataset for this symbol/interval/horizon lives.
+
+    The configured horizon keeps the plain filename so the serving path is
+    unaffected; any other horizon gets an explicit suffix. Experiments therefore
+    sit beside the production dataset instead of overwriting it — an experiment
+    that silently replaces the model's training data is how a live system starts
+    disagreeing with its own evaluation.
+    """
+    default = cfg.labels.horizon_bars.get(interval)
+    stem = f"{symbol}_{interval}"
+    if horizon is not None and horizon != default:
+        stem += f"_h{horizon}"
+    return cfg.dataset_dir() / f"{stem}.parquet"
 
 
 def feature_columns(dataset: pd.DataFrame) -> list[str]:

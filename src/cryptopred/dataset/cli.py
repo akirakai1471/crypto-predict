@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 
 from cryptopred.config import Config, load_config
-from cryptopred.dataset.builder import build_dataset
+from cryptopred.dataset.builder import build_dataset, dataset_path
 from cryptopred.dataset.quality import format_report, quality_report
 from cryptopred.ingest.storage import ParquetStore
 
@@ -22,7 +22,12 @@ def main() -> None:
     keeps `cryptopred-dataset build` working as a named subcommand."""
 
 
-def run_build(cfg: Config, store: ParquetStore, quiet: bool = False) -> list[Path]:
+def run_build(
+    cfg: Config,
+    store: ParquetStore,
+    quiet: bool = False,
+    horizon_override: int | None = None,
+) -> list[Path]:
     """Build one dataset per symbol/interval. Returns the written file paths."""
     out_dir = cfg.dataset_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -37,7 +42,7 @@ def run_build(cfg: Config, store: ParquetStore, quiet: bool = False) -> list[Pat
                 continue
 
             funding = store.read("funding", symbol, "8h")
-            horizon = cfg.labels.horizon_bars.get(interval)
+            horizon = horizon_override or cfg.labels.horizon_bars.get(interval)
             if horizon is None:
                 if not quiet:
                     typer.echo(f"{symbol} {interval}: no horizon configured, skipping")
@@ -58,7 +63,7 @@ def run_build(cfg: Config, store: ParquetStore, quiet: bool = False) -> list[Pat
                     typer.echo(f"{symbol} {interval}: dataset empty after cleaning")
                 continue
 
-            path = out_dir / f"{symbol}_{interval}.parquet"
+            path = dataset_path(cfg, symbol, interval, horizon)
             dataset.to_parquet(path, engine="pyarrow", index=True)
             written.append(path)
 
@@ -70,12 +75,22 @@ def run_build(cfg: Config, store: ParquetStore, quiet: bool = False) -> list[Pat
 
 
 @app.command()
-def build(config: Path = typer.Option(None, help="Path to a YAML config file.")) -> None:
+def build(
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+    horizon: int = typer.Option(
+        None,
+        help=(
+            "Label horizon in bars, overriding the config. Non-default horizons are "
+            "written to a suffixed file so experiments never overwrite the dataset "
+            "the live model was trained on."
+        ),
+    ),
+) -> None:
     """Build datasets for every configured symbol and interval."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     cfg = load_config(config)
     store = ParquetStore(cfg.data.root / "raw")
-    paths = run_build(cfg, store)
+    paths = run_build(cfg, store, horizon_override=horizon)
     typer.echo(f"\nWrote {len(paths)} dataset file(s).")
 
 

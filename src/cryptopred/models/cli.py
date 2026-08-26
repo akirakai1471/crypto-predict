@@ -13,6 +13,7 @@ import typer
 from cryptopred.backtest.breakeven import analyse, format_table, round_trip_cost
 from cryptopred.backtest.runner import format_backtest, run_strategy_backtest
 from cryptopred.config import load_config
+from cryptopred.dataset.builder import dataset_path
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.metrics import evaluate
 from cryptopred.models.registry import ModelRegistry
@@ -170,6 +171,9 @@ def sweep(
     interval: str = typer.Option("1h", help="Bar interval."),
     n_splits: int = typer.Option(5, help="Number of walk-forward folds."),
     rounds: int = typer.Option(400, help="LightGBM boosting rounds."),
+    horizon: int = typer.Option(
+        None, help="Label horizon in bars, overriding the config."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Diagnostic: how signal count, accuracy and PnL vary with the threshold.
@@ -183,13 +187,16 @@ def sweep(
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     cfg = load_config(config)
 
-    path = cfg.dataset_dir() / f"{symbol}_{interval}.parquet"
+    horizon = horizon or cfg.labels.horizon_bars.get(interval, 24)
+    path = dataset_path(cfg, symbol, interval, horizon)
     if not path.exists():
-        typer.echo(f"No dataset at {path}. Run `cryptopred-dataset build` first.")
+        typer.echo(
+            f"No dataset at {path}. Run "
+            f"`cryptopred-dataset build --horizon {horizon}` first."
+        )
         raise typer.Exit(code=1)
 
     dataset = pd.read_parquet(path)
-    horizon = cfg.labels.horizon_bars.get(interval, 4)
     bars = ParquetStore(cfg.data.root / "raw").read("klines", symbol, interval)
 
     evaluation = walk_forward_evaluate(

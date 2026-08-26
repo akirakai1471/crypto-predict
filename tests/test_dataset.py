@@ -64,3 +64,34 @@ def test_empty_input_returns_empty_dataset():
     empty = make_ohlcv(n=10, seed=26)
     ds = build_dataset(empty, interval="1h", horizon=4, atr_period=14, band_k=0.5)
     assert ds.empty
+
+
+def test_dataset_path_keeps_plain_name_for_the_configured_horizon(tmp_path):
+    from cryptopred.config import Config
+    from cryptopred.dataset.builder import dataset_path
+
+    cfg = Config()
+    cfg.data.root = tmp_path
+    path = dataset_path(cfg, "BTCUSDT", "1h", horizon=cfg.labels.horizon_bars["1h"])
+    assert path.name == "BTCUSDT_1h.parquet"
+
+
+def test_dataset_path_suffixes_experimental_horizons(tmp_path):
+    from cryptopred.config import Config
+    from cryptopred.dataset.builder import dataset_path
+
+    cfg = Config()
+    cfg.data.root = tmp_path
+    assert dataset_path(cfg, "BTCUSDT", "1h", horizon=48).name == "BTCUSDT_1h_h48.parquet"
+    assert dataset_path(cfg, "BTCUSDT", "1h", horizon=None).name == "BTCUSDT_1h.parquet"
+
+
+def test_experimental_dataset_never_collides_with_production(tmp_path):
+    from cryptopred.config import Config
+    from cryptopred.dataset.builder import dataset_path
+
+    cfg = Config()
+    cfg.data.root = tmp_path
+    production = dataset_path(cfg, "BTCUSDT", "1h", horizon=24)
+    experiment = dataset_path(cfg, "BTCUSDT", "1h", horizon=72)
+    assert production != experiment
