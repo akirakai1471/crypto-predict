@@ -218,6 +218,28 @@ def execution_verdict(results: list[dict[str, Any]]) -> str:
         )
 
     closest = max(makers, key=lambda r: r["total_return"])
+
+    # Say which gate actually stopped it. Reporting "the fills killed it" when
+    # returns in fact improved and the long/short split failed would send the
+    # reader looking in the wrong place.
+    beat_return = [r for r in makers if r["total_return"] > taker["total_return"]]
+    if beat_return:
+        best = max(beat_return, key=lambda r: r["total_return"])
+        if best["two_sided"] != "TWO-SIDED":
+            return (
+                f"NO — execution is not the problem here. {best['label']} does improve "
+                f"returns ({best['total_return']:+.1%} against {taker['total_return']:+.1%}) "
+                f"and the doubled-fee cushion, but the result stays {best['two_sided']}: "
+                "cheaper fees make a one-sided bet cheaper, they do not make it a "
+                "prediction"
+            )
+        if not best["survives_doubled_costs"]:
+            return (
+                f"NO — {best['label']} improves the headline return "
+                f"({best['total_return']:+.1%} against {taker['total_return']:+.1%}) but "
+                "still does not survive doubled fees"
+            )
+
     return (
         "NO BENEFIT — the cheaper fee does not survive the missed fills. The best "
         f"maker configuration ({closest['label']}) returns "

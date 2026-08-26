@@ -65,12 +65,16 @@ def test_verdict_reports_no_benefit_when_maker_loses():
     assert "NO BENEFIT" in execution_verdict(results)
 
 
-def test_verdict_ignores_maker_results_that_go_one_sided():
+def test_verdict_rejects_maker_results_that_go_one_sided():
+    """A higher return does not earn a pass if the profit is all on one side."""
     results = [
         _result("taker", 0.70),
         _result("maker 0.10% skip strict", 1.20, decision="ONE-SIDED"),
     ]
-    assert "NO BENEFIT" in execution_verdict(results)
+    v = execution_verdict(results)
+    assert v.startswith("NO")
+    assert "beats taker execution" not in v
+    assert "ONE-SIDED" in v
 
 
 def test_stress_test_keeps_the_fill_rule():
@@ -90,3 +94,37 @@ def test_stress_test_keeps_the_fill_rule():
     # the limit is far out of reach under the strict rule, so nothing trades
     assert scored["n_trades"] == 0
     assert scored["doubled_cost_return"] == pytest.approx(0.0)
+
+
+def test_verdict_names_the_one_sided_gate_not_the_fills():
+    """Regression: when returns improve but the split fails, the report must say
+    so — blaming the fill model would point the reader at the wrong thing."""
+    results = [
+        _result("taker", 0.21),
+        _result("maker 0.10% skip", 0.50, decision="ONE-SIDED"),
+        _result("maker 0.10% skip strict", 0.31, decision="ONE-SIDED"),
+    ]
+    v = execution_verdict(results)
+    assert "execution is not the problem" in v
+    assert "ONE-SIDED" in v
+    assert "missed fills" not in v
+
+
+def test_verdict_names_the_doubled_fee_gate_when_that_is_what_failed():
+    results = [
+        _result("taker", 0.21),
+        _result("maker 0.10% skip", 0.50, survives=False),
+        _result("maker 0.10% skip strict", 0.31, survives=False),
+    ]
+    v = execution_verdict(results)
+    assert "does not survive doubled fees" in v
+
+
+def test_verdict_still_blames_fills_when_returns_actually_fell():
+    results = [
+        _result("taker", 0.70),
+        _result("maker 0.10% skip", 0.30, fill_rate=0.6),
+        _result("maker 0.10% skip strict", 0.20, fill_rate=0.5),
+    ]
+    v = execution_verdict(results)
+    assert "missed fills" in v

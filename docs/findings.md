@@ -305,6 +305,60 @@ That closes the question the meta-labelling section left open. A second model
 was tried at filtering and at sizing. Neither pays, for the same underlying
 reason in two guises.
 
+## Limit orders: the first change that survives its own stress test
+
+The break-even table named this as the largest lever available: maker fees are
+roughly a third of the taker cost, and cost is the term that kills every
+configuration in this document. Unlike the two failed second-model experiments,
+this changes execution rather than prediction.
+
+It also carries the easiest way to fool yourself in the whole project. A limit
+order fills only when price comes to it, so it declines exactly the trades where
+price ran the way the model predicted. Modelling the cheaper fee without that
+selection produces a number that is wrong in the most flattering direction.
+
+**BTCUSDT, 24h horizon, threshold 0.60, 4,217 signals:**
+
+| Execution | Fill rate | Win rate | Return | Max DD | At 2x fees |
+|---|---|---|---|---|---|
+| taker | 100% | 55.7% | +70.9% | −16.7% | +33.6% |
+| maker 0.20% chase, touch-fill | 100% | 57.4% | **+109.4%** | −16.4% | +85.0% |
+| **maker 0.20% chase, strict fill** | 100% | 56.2% | **+84.7%** | −16.4% | **+61.4%** |
+| maker 0.20% skip, strict fill | 63.0% | 57.4% | +67.0% | −15.3% | +57.3% |
+
+Three things to read here.
+
+**Two thirds of the apparent gain was the fill model, not the market.** Fill
+detection from OHLC bars cannot be exact, so the assumption was stress-tested
+rather than asserted: a strict mode requires price to trade *through* the limit
+instead of merely touching it, which is closer to what happens with a queue
+ahead of you. The advantage over taker falls from +38.5pp to +13.8pp. Without
+that test this section would have claimed +109%.
+
+**What survives is the fee, and it is structural.** The doubled-fee cushion
+nearly doubles, from +33.6% to +61.4%. That is the same arithmetic as the
+break-even table: a 0.060% round trip instead of 0.140% lowers the accuracy the
+strategy must reach, and the margin it earns is not sensitive to any modelling
+choice.
+
+**Chasing unfilled limits is mandatory.** Every pure `skip` variant loses to
+taker execution under the strict rule (+67.0%, +65.9%, +68.0% against +70.9%).
+Skipping an unfilled limit means skipping the trades where price moved away
+immediately — which are the winners. The adverse selection is real and it is
+large enough to erase the fee saving on its own.
+
+**It does not manufacture an edge that is not there.** On ETHUSDT every maker
+variant improves returns (+21.1% to +32.1% under the strict rule) and turns the
+doubled-fee result from −5.6% to +17.1% — and every one stays ONE-SIDED. Cheaper
+fees make a one-sided bet cheaper; they do not make it a prediction.
+
+**Caveats that no backtest can settle.** Bar-range fill detection ignores queue
+position, order size and the intrabar path. The `chase` rule assumes a missed
+fill is noticed and crossed at the bar's close, which on 1h bars means up to an
+hour of drift. And the paper trader currently places market orders at the bar
+close, so none of this is live yet: adopting maker execution is an
+implementation change to the trading path, not a config switch.
+
 ## Decision
 
 Defaults stay at the 24-hour horizon and a 0.60 threshold. That is now the only

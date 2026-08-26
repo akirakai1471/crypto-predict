@@ -145,6 +145,41 @@ Bẫy phải tránh: model phụ dùng chung cho cả 2 chiều sẽ học "shor
 mẫu dữ liệu thị trường tăng), làm chiến lược lệch hẳn một chiều. Phải train
 **riêng từng chiều** — mặc định đã bật.
 
+## Lệnh limit (maker): thay đổi đầu tiên sống sót qua bài test của chính nó
+
+```bash
+uv run cryptopred-model execution --symbol BTCUSDT --horizon 24 --threshold 0.60
+```
+
+Phí maker bằng khoảng 1/3 phí taker. Nhưng lệnh limit **chỉ khớp khi giá tìm tới
+nó** — nghĩa là nó từ chối đúng những lần giá chạy theo hướng model đoán. Mô hình
+phí rẻ mà bỏ qua điều này sẽ ra số đẹp giả.
+
+BTC 24h, 4.217 tín hiệu:
+
+| Cách vào lệnh | Khớp | Lợi nhuận | Phí gấp đôi |
+|---|---|---|---|
+| taker | 100% | +70.9% | +33.6% |
+| maker chase, khớp dễ (chạm) | 100% | +109.4% | +85.0% |
+| **maker chase, khớp khắt khe (xuyên)** | 100% | **+84.7%** | **+61.4%** |
+| maker skip, khớp khắt khe | 63% | +67.0% | +57.3% |
+
+**Ba điều phải đọc:**
+
+1. **2/3 lợi thế ban đầu là ảo tưởng của mô hình khớp lệnh.** Bắt giá phải *xuyên
+   qua* mức limit thay vì chỉ *chạm*, lợi thế tụt từ +38.5pp xuống +13.8pp.
+2. **Phần còn lại là thật và đến từ phí.** Đệm phí gấp đôi gần gấp đôi:
+   +33.6% → +61.4%. Đây là cùng một phép tính với bảng hoà vốn.
+3. **Bắt buộc `chase` khi không khớp.** Mọi biến thể `skip` đều **thua** taker —
+   vì lệnh không khớp chính là lệnh sắp thắng.
+
+Và nó **không tạo ra edge từ hư không**: trên ETH mọi biến thể maker đều tăng lợi
+nhuận nhưng vẫn **một chiều**. Phí rẻ làm cược một chiều rẻ hơn, không biến nó
+thành dự đoán.
+
+**Chưa áp dụng thật:** paper trader hiện đặt lệnh market. Chuyển sang maker là
+sửa đường thực thi, không phải đổi config.
+
 ## Cỡ lệnh theo xác suất: cũng không ăn thua, và biết rõ vì sao
 
 ```bash
