@@ -47,10 +47,17 @@ Cả hai khung dùng chung code; chỉ khác cấu hình (`horizon`, `threshold`
 
 ### Dữ liệu
 Từ Binance public API (không cần API key):
-- OHLCV klines (lịch sử từ 2017 với BTC, từ khi list với coin khác).
-- Funding rate (8h/lần).
-- Open interest (5m).
-- Long/short account ratio.
+
+| Dữ liệu | Endpoint | Lịch sử có sẵn | Dùng để train? |
+|---|---|---|---|
+| OHLCV klines (USDT perp) | `fapi/v1/klines` | Từ 2019-09 (BTCUSDT perp) | **Có** |
+| Funding rate | `fapi/v1/fundingRate` | Toàn bộ, từ khi list | **Có** |
+| Open interest | `futures/data/openInterestHist` | **Chỉ 30 ngày gần nhất** | **Không** — chỉ hiển thị |
+| Long/short ratio | `futures/data/globalLongShortAccountRatio` | **Chỉ 30 ngày gần nhất** | **Không** — chỉ hiển thị |
+
+**Giới hạn 30 ngày là ràng buộc cứng của Binance.** Không thể xây feature OI/long-short cho dataset train nhiều năm — dùng chúng làm feature sẽ khiến dataset teo còn 30 ngày (quá ít, chắc chắn overfit). Hai nguồn này vẫn được thu thập liên tục để hiển thị trên dashboard và tích luỹ dần cho phiên bản sau (sau ~1 năm chạy sẽ đủ dữ liệu để cân nhắc đưa vào train).
+
+Dùng giá **USDT perpetual futures** làm chuỗi giá chính (không phải spot) vì đó là thị trường sẽ giao dịch, và funding rate khớp cùng thị trường.
 
 ---
 
@@ -128,7 +135,7 @@ sync_latest(symbol, interval)       # cập nhật tới nến mới nhất
 | Volatility | ATR chuẩn hoá, Bollinger width, realized vol nhiều cửa sổ, tỉ lệ vol ngắn/dài |
 | Volume | OBV slope, volume z-score, tỉ lệ taker buy/sell, volume-price divergence |
 | Cấu trúc giá | khoảng cách tới cao/thấp N nến, vị trí close trong range nến, chuỗi nến tăng/giảm liên tiếp |
-| Phái sinh | funding rate hiện tại + trung bình, thay đổi open interest, long/short ratio |
+| Phái sinh | funding rate hiện tại, trung bình trượt, độ lệch so với chuẩn, thời gian tới lần funding kế (OI và long/short **không** dùng — xem mục 2) |
 | Chế độ thị trường | ADX, phân loại trend/range, percentile volatility 30 ngày |
 | Thời gian | giờ trong ngày (sin/cos), thứ trong tuần, phiên Á/Âu/Mỹ |
 | Đa khung | feature từ TF lớn hơn (4h, 1d) resample xuôi thời gian |
