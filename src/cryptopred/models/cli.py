@@ -41,19 +41,25 @@ def train(
             "stored in the model metadata and displayed wherever the model is used."
         ),
     ),
+    horizon: int = typer.Option(
+        None, help="Label horizon in bars, overriding the config."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Evaluate walk-forward, print the report, and optionally save the model."""
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     cfg = load_config(config)
 
-    path = cfg.dataset_dir() / f"{symbol}_{interval}.parquet"
+    horizon = horizon or cfg.labels.horizon_bars.get(interval, 24)
+    path = dataset_path(cfg, symbol, interval, horizon)
     if not path.exists():
-        typer.echo(f"No dataset at {path}. Run `cryptopred-dataset build` first.")
+        typer.echo(
+            f"No dataset at {path}. Run "
+            f"`cryptopred-dataset build --horizon {horizon}` first."
+        )
         raise typer.Exit(code=1)
 
     dataset = pd.read_parquet(path)
-    horizon = cfg.labels.horizon_bars.get(interval, 4)
     train_config = TrainConfig(
         num_boost_round=rounds, signal_threshold=threshold, calibrate=True
     )

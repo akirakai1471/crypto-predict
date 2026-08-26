@@ -31,6 +31,7 @@ cryptopred-ingest = "cryptopred.ingest.cli:app"
 cryptopred-dataset = "cryptopred.dataset.cli:app"
 cryptopred-model = "cryptopred.models.cli:app"
 cryptopred-serve = "cryptopred.serve.cli:app"
+cryptopred-paper = "cryptopred.paper.cli:app"
 
 [build-system]
 requires = ["hatchling"]

@@ -142,10 +142,55 @@ order that never fills is a trade that never happened, and the strategy's
 realised accuracy is then measured on a different set of bars than the backtest
 assumed.
 
+## Longer horizons: the experiment that narrowed the evidence
+
+The break-even table predicted, before any of these runs, that longer horizons
+should make more configurations viable by lowering the bar rather than raising
+accuracy. That prediction was testable, and the threshold sweeps appeared to
+confirm it: at 48h and 72h, **ETHUSDT became robust for the first time**, and
+BTCUSDT stayed robust. Two symbols working looked like the cross-symbol
+confirmation the 24h result was missing.
+
+It was not. Splitting the trades by side dissolves it.
+
+| Configuration | Long PnL | Short PnL | Short win rate | Verdict |
+|---|---|---|---|---|
+| **BTC 1h, 24h horizon, t=0.60** | +4,701 | **+793** | **55.1%** | **two-sided** |
+| BTC 1h, 48h horizon, t=0.65 | +4,029 | +58 | 43.6% | one-sided |
+| ETH 1h, 48h horizon, t=0.65 | +4,544 | **−357** | 50.9% | one-sided |
+
+At 48 hours both symbols make all their money on the long side. BTC's shorts win
+43.6% of the time — worse than a coin flip — and contribute 58 USDT out of 4,087,
+which is rounding. ETH's shorts lose outright. Over a sample where both assets
+rose several-fold, a long-only strategy produces a rising equity curve and a win
+rate above 50% while predicting nothing at all; that is what these two rows are.
+
+Only the 24-hour BTC configuration earns on both sides, with shorts winning 55.1%
+across 1,106 trades. That is the one result here that cannot be explained by
+market drift.
+
+Two things follow. First, the aggregate return in a threshold sweep is not
+sufficient evidence — it hid a long-only bias in three of four configurations,
+and would have hidden it in the headline 24h number too had the split not been
+checked. Second, the 24h choice is now supported by a test it was not selected
+on: it was chosen for surviving doubled costs, and it separately turns out to be
+the only configuration with a genuine short side.
+
+The classification gate agrees, for its own reasons: BTC's directional edge at
+48h has a bootstrap CI of [−0.001, +0.029], which **includes zero**. At 24h the
+same interval is [+0.056, +0.088]. The longer horizon is not significant.
+
+**Configurations examined now total 63** (2 symbols × 4 horizons × 7 thresholds,
+plus 7 on the 1m timeframe). The multiple-comparison caveat gets worse with every
+one of them, which is precisely why the by-side split matters: it is a structural
+test that noise cannot pass by luck, not another cell in a search grid.
+
 ## Decision
 
-Defaults changed to the 24-hour horizon and a 0.60 threshold, as the only
-configuration with any evidence behind it. **No live trading.** The next step is
+Defaults stay at the 24-hour horizon and a 0.60 threshold. That is now the only
+configuration that is robust to doubled costs, statistically significant against
+its baselines, and profitable on both sides of the market. The 48h and 72h
+experiments are recorded above and rejected. **No live trading.** The next step is
 paper trading, which measures the strategy forward on bars that did not exist
 when any of these choices were made. That is the only test none of the above
 can fake.

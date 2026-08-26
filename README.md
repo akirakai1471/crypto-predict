@@ -113,6 +113,25 @@ vô nghĩa** — sửa rò rỉ trước, đừng train.
    chứng minh ngược lại.
 6. Mọi tỉ lệ hiển thị kèm cỡ mẫu.
 
+## Kiểm tra long/short — thứ mà tổng lợi nhuận che giấu
+
+```bash
+uv run cryptopred-paper replay --symbol BTCUSDT --horizon 24 --threshold 0.60
+```
+
+Chạy dự đoán out-of-sample qua **chính PaperTrader thật**, rồi tách kết quả theo
+chiều. Trong giai đoạn giá tăng nhiều lần, chiến lược chỉ-long vẫn cho đường vốn
+đi lên và win rate trên 50% dù không dự đoán được gì.
+
+| Cấu hình | Long PnL | Short PnL | Short win rate | Kết luận |
+|---|---|---|---|---|
+| **BTC 24h @0.60** | +4,701 | **+793** | **55.1%** | **hai chiều** |
+| BTC 48h @0.65 | +4,029 | +58 | 43.6% | một chiều |
+| ETH 48h @0.65 | +4,544 | −357 | 50.9% | một chiều |
+
+Chỉ BTC 24h kiếm được tiền ở **cả hai chiều**. Đó là kết quả duy nhất không giải
+thích được bằng "thị trường tăng".
+
 ## Vì sao 1m scalping bị đóng vĩnh viễn
 
 Model khung 1m là model **chính xác nhất** dự án — 61.4% đúng hướng, hơn cả model
