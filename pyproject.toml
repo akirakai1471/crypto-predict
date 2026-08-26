@@ -12,6 +12,8 @@ dependencies = [
     "pyyaml>=6.0",
     "typer>=0.12",
     "tqdm>=4.66",
+    "lightgbm>=4.5",
+    "scikit-learn>=1.5",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +26,7 @@ dev = [
 [project.scripts]
 cryptopred-ingest = "cryptopred.ingest.cli:app"
 cryptopred-dataset = "cryptopred.dataset.cli:app"
+cryptopred-model = "cryptopred.models.cli:app"
 
 [build-system]
 requires = ["hatchling"]
