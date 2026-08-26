@@ -32,6 +32,7 @@ cryptopred-dataset = "cryptopred.dataset.cli:app"
 cryptopred-model = "cryptopred.models.cli:app"
 cryptopred-serve = "cryptopred.serve.cli:app"
 cryptopred-paper = "cryptopred.paper.cli:app"
+cryptopred-meta = "cryptopred.models.meta_cli:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -57,4 +58,4 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 # typer.Option() in an argument default is the framework's documented idiom
-"src/cryptopred/*/cli.py" = ["B008"]
+"src/cryptopred/**/*cli.py" = ["B008"]
