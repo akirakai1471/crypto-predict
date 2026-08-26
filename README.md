@@ -89,6 +89,25 @@ Xem kết quả bất cứ lúc nào: nhấp đúp `status.bat`, hoặc
 uv run cryptopred-serve status
 ```
 
+**Tắt máy thì sao?**
+
+| | |
+|---|---|
+| Dữ liệu nến | An toàn — chạy lại tự tải bù |
+| Lệnh chờ, vị thế đang mở | An toàn — nằm trong SQLite |
+| Chấm điểm dự đoán cũ | An toàn — chấm bù bình thường |
+| Dự đoán cho nến lúc máy tắt | **Điền bù, và đánh dấu** |
+
+Chỗ cuối là điểm tế nhị. Model không dùng dữ liệu tương lai nên xác suất điền bù
+**y hệt** cái nó sẽ đưa ra lúc chạy thật. Nhưng một dòng viết sau khi đã biết kết
+quả thì **không chứng minh được** nó không bị ảnh hưởng bởi kết quả đó — mà khả
+năng chứng minh ấy chính là lý do log này giá trị hơn backtest.
+
+Nên: điền bù để đường vốn liền mạch, đánh dấu `was_backfilled`, và **loại khỏi
+con số dùng làm bằng chứng**. `status` in riêng hai loại.
+
+Chạy lại `run.bat` sau khi bật máy là đủ.
+
 **Vài ngày cho biết gì, và không cho biết gì.** Chiến lược chỉ ra tín hiệu ở
 ~8% số nến — khoảng **2 tín hiệu/ngày** — và mỗi tín hiệu cần 24 giờ mới chấm
 được. Nên:

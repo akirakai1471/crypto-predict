@@ -33,6 +33,12 @@ CREATE TABLE IF NOT EXISTS predictions (
     actual_label    INTEGER,
     is_correct      INTEGER,
     scored_at       TEXT,
+    -- 1 when the row was written after its bar had already closed, because the
+    -- machine was off. The model is deterministic and uses no future data, so
+    -- the probability is the same one it would have produced live — but the row
+    -- can no longer *prove* it was written before the outcome existed, and that
+    -- proof is the only reason this log is worth more than a backtest.
+    was_backfilled  INTEGER DEFAULT 0,
     UNIQUE (symbol, interval, bar_close_time, model_version)
 );
 
@@ -69,6 +75,21 @@ CREATE TABLE IF NOT EXISTS paper_trades (
 
 CREATE INDEX IF NOT EXISTS idx_trades_status ON paper_trades (status);
 """
+
+
+PREDICTION_MIGRATIONS = [
+    "ALTER TABLE predictions ADD COLUMN was_backfilled INTEGER DEFAULT 0",
+]
+
+
+def _apply_prediction_migrations(conn: sqlite3.Connection) -> None:
+    """Add columns to an existing predictions table, ignoring ones already there."""
+    for statement in PREDICTION_MIGRATIONS:
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
 
 
 def _needs_rebuild(conn: sqlite3.Connection) -> bool:
@@ -123,6 +144,7 @@ class PredictionStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            _apply_prediction_migrations(conn)
             if _needs_rebuild(conn):
                 _rebuild_paper_trades(conn)
 
@@ -147,6 +169,7 @@ class PredictionStore:
         signal: int,
         close_price: float,
         model_version: str,
+        was_backfilled: bool = False,
     ) -> bool:
         """Insert a prediction. Returns False if this bar was already recorded."""
         prob_down, prob_flat, prob_up = proba
@@ -155,8 +178,9 @@ class PredictionStore:
                 """
                 INSERT OR IGNORE INTO predictions
                     (symbol, interval, bar_close_time, prob_down, prob_flat, prob_up,
-                     signal, confidence, close_price, model_version, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     signal, confidence, close_price, model_version, created_at,
+                     was_backfilled)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     symbol,
@@ -170,6 +194,7 @@ class PredictionStore:
                     float(close_price),
                     model_version,
                     pd.Timestamp.now(tz="UTC").isoformat(),
+                    int(was_backfilled),
                 ),
             )
             return cursor.rowcount > 0
@@ -222,7 +247,12 @@ class PredictionStore:
             return dict(row) if row else None
 
     def accuracy_summary(self, symbol: str, interval: str) -> dict[str, Any]:
-        """Live accuracy, computed only from predictions that have been scored.
+        """Live accuracy from scored predictions that were written before the fact.
+
+        Backfilled rows are excluded here on purpose. They are legitimate
+        predictions — the model saw no future data — but they were written once
+        the answer already existed, and a number meant as evidence should be
+        computed only from rows that can prove they were not.
 
         Deliberately returns `n` alongside every rate: an accuracy figure without
         its sample size invites the reader to trust six observations.
@@ -237,6 +267,7 @@ class PredictionStore:
                            AS correct_signals
                 FROM predictions
                 WHERE symbol = ? AND interval = ? AND actual_return IS NOT NULL
+                  AND COALESCE(was_backfilled, 0) = 0
                 """,
                 (symbol, interval),
             ).fetchone()

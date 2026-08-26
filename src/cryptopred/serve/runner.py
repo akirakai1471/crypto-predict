@@ -15,6 +15,7 @@ from cryptopred.ingest.binance import BinanceClient
 from cryptopred.ingest.cli import run_klines_ingest
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.paper.trader import PaperTrader
+from cryptopred.serve.gapfill import fill_gaps
 from cryptopred.serve.predictor import Predictor
 from cryptopred.serve.scoring import score_pending
 from cryptopred.serve.store import PredictionStore
@@ -39,6 +40,7 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
     counts = {
         "bars": 0, "predictions": 0, "scored": 0, "opened": 0, "closed": 0,
         "filled": 0, "chased": 0, "cancelled": 0, "pending": 0,
+        "backfilled": 0,
     }
 
     sync_cfg = cfg.model_copy(deep=True)
@@ -52,6 +54,14 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
         except FileNotFoundError:
             logger.warning("no model for %s %s, skipping prediction", symbol, interval)
             continue
+
+        # Bars that closed while the machine was off get a flagged row, so a
+        # shutdown leaves a visible gap rather than an invisible one.
+        gaps = fill_gaps(
+            cfg, predictions, parquet, symbol, interval,
+            horizon=horizon, predictor=predictor,
+        )
+        counts["backfilled"] += gaps["filled"]
 
         prediction = predictor.predict_latest(symbol, interval)
         if prediction is not None:

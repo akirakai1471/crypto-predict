@@ -121,3 +121,31 @@ def test_status_always_shows_the_sample_size(cfg):
     text = format_status(collect(cfg))
     assert "6/8" in text
     assert "95% CI" in text
+
+
+def test_backfilled_rows_are_excluded_from_the_headline_rate(cfg):
+    """A row written after its outcome existed cannot prove it was not
+    influenced by it, so it must not feed the number used as evidence."""
+    store = PredictionStore(cfg.data.root / "predictions.db")
+    base = pd.Timestamp("2024-01-01", tz="UTC")
+
+    for i in range(10):
+        store.record_prediction(
+            symbol="BTCUSDT", interval="1h",
+            bar_close_time=base + pd.Timedelta(hours=i),
+            proba=(0.2, 0.2, 0.6), signal=1, close_price=100.0,
+            model_version="v1",
+            was_backfilled=i >= 4,        # last six were filled after a shutdown
+        )
+    for _, r in store.unscored("BTCUSDT", "1h").iterrows():
+        store.score_prediction(int(r["id"]), 0.01, 1, True)
+
+    s = collect(cfg)["symbols"][0]
+    assert s["n_predictions"] == 10
+    assert s["n_live"] == 4
+    assert s["n_backfilled"] == 6
+    assert s["n_scored_signals"] == 4      # only the live rows count
+
+    text = format_status(collect(cfg))
+    assert "backfilled" in text
+    assert "cannot prove" in text

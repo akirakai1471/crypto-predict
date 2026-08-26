@@ -54,8 +54,16 @@ def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
         if history.empty:
             continue
 
-        scored = history[history["actual_return"].notna()]
-        signals = history[history["signal"] != 0]
+        backfilled_flag = (
+            history["was_backfilled"].fillna(0).astype(int)
+            if "was_backfilled" in history.columns
+            else pd.Series(0, index=history.index)
+        )
+        live = history[backfilled_flag == 0]
+        backfilled = history[backfilled_flag == 1]
+
+        scored = live[live["actual_return"].notna()]
+        signals = live[live["signal"] != 0]
         scored_signals = scored[scored["signal"] != 0]
         correct_signals = int(scored_signals["is_correct"].sum()) if not scored_signals.empty else 0
 
@@ -70,6 +78,8 @@ def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
             {
                 "symbol": symbol,
                 "n_predictions": int(len(history)),
+                "n_live": int(len(live)),
+                "n_backfilled": int(len(backfilled)),
                 "n_scored": int(len(scored)),
                 "n_signals": int(len(signals)),
                 "n_scored_signals": int(len(scored_signals)),
@@ -107,13 +117,26 @@ def format_status(status: dict[str, Any], backtest_reference: float = 0.589) -> 
         lines += [
             "",
             f"{s['symbol']} — {s['n_predictions']:,} predictions over {span}",
-            f"  scored so far:      {s['n_scored']:,} of {s['n_predictions']:,} "
+            f"  scored so far:      {s['n_scored']:,} of {s['n_live']:,} live rows "
             "(the rest are waiting for their horizon)",
             f"  signals taken:      {s['n_signals']:,}"
             f"   scored: {s['n_scored_signals']:,}",
             f"  resting orders:     {s['pending_orders']:,}"
             f"   open positions: {s['open_positions']:,}",
         ]
+
+        if s["n_backfilled"]:
+            lines.append(
+                f"  backfilled:         {s['n_backfilled']:,} rows written after their "
+                "bar closed (machine was off)"
+            )
+            lines.append(
+                "                      excluded from the result below — a row written "
+                "after the answer existed"
+            )
+            lines.append(
+                "                      cannot prove it was not influenced by it"
+            )
 
         n = s["n_scored_signals"]
         if n == 0:

@@ -73,7 +73,22 @@ class Predictor:
 
     def predict_latest(self, symbol: str, interval: str) -> Prediction | None:
         """Predict from the most recently closed bar, or None if data is short."""
+        return self.predict_at(symbol, interval, upto=None)
+
+    def predict_at(
+        self, symbol: str, interval: str, upto: pd.Timestamp | None
+    ) -> Prediction | None:
+        """Predict the last bar at or before `upto`, or the newest bar if None.
+
+        Used to fill gaps left by downtime. Features at a bar use only data that
+        closed at or before it, so the probability here is identical to the one
+        the model would have produced live — but the caller must still mark such
+        a row as backfilled, because the log's value rests on being able to prove
+        a row predates its outcome, not merely on the number being right.
+        """
         bars = self.store.read("klines", symbol, interval)
+        if upto is not None:
+            bars = bars[bars.index <= upto]
         if len(bars) < MIN_WARMUP_BARS:
             return None
 
