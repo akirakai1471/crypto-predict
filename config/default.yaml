@@ -1,0 +1,18 @@
+# Default configuration. Copy to config/local.yaml to override without touching git.
+data:
+  symbols: [BTCUSDT, ETHUSDT]
+  intervals: ["1h", "1m"]
+  start: "2019-09-01"
+
+labels:
+  horizon_bars:
+    "1h": 4    # predict direction 4 hours ahead
+    "1m": 5    # predict direction 5 minutes ahead
+  atr_period: 14
+  band_k: 0.5  # dead zone = 0.5 * ATR; moves smaller than this are labelled FLAT
+
+features:
+  zscore_window: 200
+  mtf_rules:
+    "1h": ["4h", "1D"]
+    "1m": ["15min", "1h"]
