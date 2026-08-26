@@ -94,6 +94,54 @@ Two further caveats:
   overfitted choice.
 - The whole 24-hour result rests on one asset. One asset is an anecdote.
 
+## The break-even table, which explains everything above
+
+Every result in this document follows from one inequality that could have been
+computed on day one, before a single model was trained. A directional bet with
+accuracy `p` on a move of size `m`, paying round-trip cost `c`, breaks even when
+
+```
+p·m − (1−p)·m = c      →      p = (c/m + 1) / 2
+```
+
+Cost is fixed. Move size grows with horizon. So the accuracy a strategy *needs*
+falls as the horizon lengthens, while the accuracy a model *has* is roughly
+flat. Measured on BTCUSDT, taker round trip 0.140%:
+
+| Horizon | Median abs move | Break-even accuracy | Measured accuracy | |
+|---|---|---|---|---|
+| 1m → 5 min | 0.070% | **149.5%** | 61.4% | impossible |
+| 1h → 4h | 0.464% | 65.1% | 58.9% | short by 6.2pp |
+| 1h → 12h | 0.883% | 57.9% | — | |
+| 1h → 24h | 1.373% | **55.1%** | 58.9% | clears by 3.8pp |
+| 1h → 48h | 2.066% | 53.4% | — | |
+| 1h → 168h | 4.092% | 51.7% | — | |
+
+The 1m result is the sharpest illustration. That model is the **most accurate in
+the entire project** — 61.4% sign accuracy at threshold 0.60, better than the
+24-hour model — and it lost 45% of capital. A five-minute BTC move is 0.070%
+while the toll to capture it is 0.140%, twice the size. Break-even would require
+149.5% accuracy, which does not exist. A perfect oracle loses money scalping at
+taker fees. Accuracy was never the binding constraint.
+
+This reframes the earlier retune. Moving from 4h to 24h was not a lucky search
+result; it moved the strategy from the wrong side of an arithmetic inequality to
+the right side. The plateau across thresholds is what that looks like in data.
+
+Two caveats on the table. The right-hand column holds accuracy constant at
+58.9%, which was measured at the 24-hour horizon only — accuracy at 48h and 168h
+is **assumed, not measured**. And median move understates the mean in a
+fat-tailed market, so this is a rough guide, not a precise threshold.
+
+**Maker fees change the arithmetic materially.** Limit orders on Binance pay
+0.02% instead of 0.05% and cross less spread; a 0.060% round trip drops the 4h
+break-even from 65.1% to 56.5%, which the measured 58.9% would clear. That is
+the largest single lever available, and it is a change to execution, not to the
+model. It also introduces fill risk the current backtest does not model: a limit
+order that never fills is a trade that never happened, and the strategy's
+realised accuracy is then measured on a different set of bars than the backtest
+assumed.
+
 ## Decision
 
 Defaults changed to the 24-hour horizon and a 0.60 threshold, as the only
@@ -104,6 +152,12 @@ can fake.
 
 Expect the paper result to be worse than +70.9%. If it is not, re-read this
 document before believing it.
+
+**The 1m scalping horizon is closed, permanently.** Not because the model failed
+— it is the best model here — but because the arithmetic forbids it at taker
+fees. No amount of further modelling reopens it. Only an execution change
+(maker-only fills) or a venue with materially lower fees would, and neither is
+in scope.
 
 ## Bug found and fixed along the way
 

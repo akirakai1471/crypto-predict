@@ -106,9 +106,27 @@ vô nghĩa** — sửa rò rỉ trước, đừng train.
    chứng minh ngược lại.
 6. Mọi tỉ lệ hiển thị kèm cỡ mẫu.
 
+## Vì sao 1m scalping bị đóng vĩnh viễn
+
+Model khung 1m là model **chính xác nhất** dự án — 61.4% đúng hướng, hơn cả model
+24h. Nó vẫn lỗ 45%.
+
+Lý do là số học, không phải model. Bài toán hoà vốn: cược có độ chính xác `p`
+trên biên độ `m`, phí khứ hồi `c`, hoà vốn khi `p = (c/m + 1) / 2`.
+
+| Horizon | Biên độ trung vị | Accuracy cần để hoà vốn |
+|---|---|---|
+| 1m → 5 phút | 0.070% | **149.5%** |
+| 1h → 4 giờ | 0.464% | 65.1% |
+| 1h → 24 giờ | 1.373% | **55.1%** |
+
+Phí 0.140% gấp đôi biên độ 5 phút. Cần độ chính xác 149.5% — không tồn tại.
+**Một nhà tiên tri đoán đúng 100% vẫn lỗ khi scalping với phí taker.**
+
+Chỉ 2 thứ mở lại được khung này: lệnh limit (maker, phí khứ hồi 0.060%) hoặc sàn
+phí thấp hơn hẳn. Không phải model tốt hơn.
+
 ## Còn thiếu
 
 - Chưa nối WebSocket realtime; scheduler dùng REST mỗi lần đóng nến.
-- Chưa train/đánh giá khung 1m (dataset 3.6M dòng đã dựng sẵn).
-- Biểu đồ nến trên dashboard chưa vẽ; API `/api/candles` đã sẵn sàng.
 - Giao dịch thật: cần spec riêng, chỉ mở sau khi paper trading dương ≥ 1 tháng.
