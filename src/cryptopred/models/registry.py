@@ -12,7 +12,7 @@ import json
 import pickle
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -74,7 +74,7 @@ class ModelRegistry:
         n_train_rows: int | None = None,
     ) -> str:
         # Millisecond precision so two saves in the same second stay distinct.
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")[:-3]
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")[:-3]
         version = f"{symbol}_{interval}_{stamp}"
         directory = self.root / version
         directory.mkdir(parents=True, exist_ok=True)
@@ -88,7 +88,7 @@ class ModelRegistry:
             "version": version,
             "symbol": symbol,
             "interval": interval,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "features": result.features,
             "n_features": len(result.features),
             "n_train_rows": n_train_rows,
@@ -135,7 +135,9 @@ class ModelRegistry:
             prefix = f"{symbol}_"
             if interval:
                 prefix = f"{symbol}_{interval}_"
-        return sorted(d.name for d in self.root.iterdir() if d.is_dir() and d.name.startswith(prefix))
+        return sorted(
+            d.name for d in self.root.iterdir() if d.is_dir() and d.name.startswith(prefix)
+        )
 
     def latest(self, symbol: str, interval: str) -> str | None:
         versions = self.list_versions(symbol, interval)

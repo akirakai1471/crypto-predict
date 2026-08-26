@@ -54,8 +54,12 @@ def test_metadata_is_written(tmp_path):
 def test_latest_returns_most_recent_version(tmp_path):
     _, result = _fold_result()
     registry = ModelRegistry(tmp_path)
-    first = registry.save(result, symbol="BTCUSDT", interval="1h", metrics={}, config=TrainConfig())
-    second = registry.save(result, symbol="BTCUSDT", interval="1h", metrics={}, config=TrainConfig())
+    first = registry.save(
+        result, symbol="BTCUSDT", interval="1h", metrics={}, config=TrainConfig()
+    )
+    second = registry.save(
+        result, symbol="BTCUSDT", interval="1h", metrics={}, config=TrainConfig()
+    )
 
     assert first != second
     assert registry.latest("BTCUSDT", "1h") == second
@@ -68,7 +72,9 @@ def test_latest_returns_none_when_empty(tmp_path):
 def test_predict_rejects_missing_features(tmp_path):
     df, result = _fold_result()
     registry = ModelRegistry(tmp_path)
-    version = registry.save(result, symbol="BTCUSDT", interval="1h", metrics={}, config=TrainConfig())
+    version = registry.save(
+        result, symbol="BTCUSDT", interval="1h", metrics={}, config=TrainConfig()
+    )
     bundle = registry.load(version)
 
     broken = df.iloc[1500:].drop(columns=["signal"])

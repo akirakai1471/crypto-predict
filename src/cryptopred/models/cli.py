@@ -6,10 +6,14 @@ import json
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import typer
 
+from cryptopred.backtest.runner import format_backtest, run_strategy_backtest
 from cryptopred.config import load_config
+from cryptopred.ingest.storage import ParquetStore
+from cryptopred.models.metrics import evaluate
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.models.report import format_evaluation, verdict
 from cryptopred.models.train import TrainConfig, train_fold, walk_forward_evaluate
@@ -51,6 +55,17 @@ def train(
     )
 
     report = format_evaluation(evaluation, symbol=symbol, interval=interval, threshold=threshold)
+
+    # The classification report says whether the model knows anything. The
+    # backtest says whether that knowledge survives contact with fees.
+    bars = ParquetStore(cfg.data.root / "raw").read("klines", symbol, interval)
+    if not bars.empty:
+        test_index = dataset.index[-evaluation["n_test_total"] :]
+        bt = run_strategy_backtest(
+            bars, evaluation, test_index, horizon=horizon, threshold=threshold
+        )
+        report += "\n\n" + format_backtest(bt, symbol=symbol, interval=interval)
+
     typer.echo(report)
 
     reports_dir = cfg.data.root / "reports"
@@ -94,6 +109,78 @@ def train(
         n_train_rows=len(final_train),
     )
     typer.echo(f"\nSaved model {version}")
+
+
+@app.command()
+def sweep(
+    symbol: str = typer.Option("BTCUSDT", help="Symbol to analyse."),
+    interval: str = typer.Option("1h", help="Bar interval."),
+    n_splits: int = typer.Option(5, help="Number of walk-forward folds."),
+    rounds: int = typer.Option(400, help="LightGBM boosting rounds."),
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+) -> None:
+    """Diagnostic: how signal count, accuracy and PnL vary with the threshold.
+
+    READ THIS BEFORE USING THE OUTPUT. Picking the best row of this table and
+    trading it is overfitting — the table is computed on the same out-of-sample
+    data used to judge the model, so the winning threshold is partly fitted to
+    that data's noise. Use it to understand the shape of the trade-off, then
+    validate any chosen threshold on data this sweep never touched.
+    """
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    cfg = load_config(config)
+
+    path = cfg.dataset_dir() / f"{symbol}_{interval}.parquet"
+    if not path.exists():
+        typer.echo(f"No dataset at {path}. Run `cryptopred-dataset build` first.")
+        raise typer.Exit(code=1)
+
+    dataset = pd.read_parquet(path)
+    horizon = cfg.labels.horizon_bars.get(interval, 4)
+    bars = ParquetStore(cfg.data.root / "raw").read("klines", symbol, interval)
+
+    evaluation = walk_forward_evaluate(
+        dataset,
+        n_splits=n_splits,
+        horizon=horizon,
+        config=TrainConfig(num_boost_round=rounds, calibrate=True),
+    )
+    test_index = dataset.index[-evaluation["n_test_total"] :]
+
+    typer.echo("\n*** DIAGNOSTIC ONLY — choosing a threshold from this table overfits it ***\n")
+    header = (
+        f"{'thresh':>7} {'signals':>9} {'sign_acc':>9} {'net_ret':>10} "
+        f"{'maxDD':>9} {'2x_cost':>10} {'robust':>7}"
+    )
+    typer.echo(header)
+    typer.echo("-" * len(header))
+
+    for threshold in [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]:
+        metrics = evaluate(
+            evaluation["y_true"],
+            evaluation["proba"],
+            threshold=threshold,
+            forward_return=evaluation["forward_return"],
+        )
+        bt = run_strategy_backtest(
+            bars, evaluation, test_index, horizon=horizon, threshold=threshold
+        )
+        base = bt["base"].summary
+        doubled = bt["doubled_costs"].summary
+        typer.echo(
+            f"{threshold:>7.2f} {metrics['n_signals']:>9,} "
+            f"{_num(metrics.get('sign_accuracy')):>9} "
+            f"{_num(base.get('total_return'), pct=True):>10} "
+            f"{_num(base.get('max_drawdown'), pct=True):>9} "
+            f"{_num(doubled.get('total_return'), pct=True):>10} "
+            f"{str(bt['survives_doubled_costs']):>7}"
+        )
+
+
+def _num(value: float | None, pct: bool = False) -> str:
+    if value is None or not np.isfinite(value):
+        return "n/a"
+    return f"{value * 100:.1f}%" if pct else f"{value:.4f}"
 
 
 @app.command()
