@@ -18,6 +18,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from cryptopred.backtest.execution import ExecutionModel, entry_fill, exit_fill
+
 LONG, SHORT, FLAT = 1, -1, 0
 
 
@@ -51,6 +53,7 @@ def backtest(
     signals: pd.DataFrame,
     horizon: int,
     costs: CostModel | None = None,
+    execution: ExecutionModel | None = None,
 ) -> BacktestResult:
     """Run every signal as a fixed-horizon trade and compound the results.
 
@@ -61,6 +64,12 @@ def backtest(
     An optional `size` column in [0, 1] scales how much of the trade's capital
     slot is used, so a rule can bet less on weaker signals. It cannot exceed 1:
     variable sizing may reduce exposure but never introduce leverage.
+
+    `execution` selects how orders reach the market. The default reproduces the
+    original behaviour exactly: market orders at the bar open, always filled,
+    paying `costs`. A maker model posts limit orders instead, which fill only
+    when price comes to them — see `execution.py` for why that matters more
+    than the lower fee does.
     """
     costs = costs or CostModel()
     aligned = signals.reindex(bars.index)["signal"].fillna(0).astype(int)
@@ -70,11 +79,17 @@ def backtest(
         sizes = np.ones(len(bars))
 
     opens = bars["open"].to_numpy()
+    highs = bars["high"].to_numpy() if "high" in bars.columns else opens
+    lows = bars["low"].to_numpy() if "low" in bars.columns else opens
+    closes = bars["close"].to_numpy() if "close" in bars.columns else opens
     index = bars.index
     n = len(bars)
     bar_hours = _bar_hours(index)
 
     rows = []
+    n_signals = 0
+    n_unfilled = 0
+
     for position, direction in enumerate(aligned.to_numpy()):
         if direction == FLAT:
             continue
@@ -87,13 +102,40 @@ def backtest(
         if exit_pos >= n:
             continue
 
-        entry_price = opens[entry_pos]
-        exit_price = opens[exit_pos]
-        gross = direction * (exit_price / entry_price - 1)
+        n_signals += 1
 
+        if execution is None:
+            entry_price = opens[entry_pos]
+            exit_price = opens[exit_pos]
+            entry_cost = costs.taker_fee + costs.slippage
+            exit_cost = costs.taker_fee + costs.slippage
+            entry_maker = exit_maker = False
+        else:
+            entry = entry_fill(
+                opens[entry_pos], highs[entry_pos], lows[entry_pos], closes[entry_pos],
+                direction, execution,
+            )
+            if not entry.filled:
+                n_unfilled += 1
+                continue   # the limit never traded; this trade did not happen
+            leave = exit_fill(
+                opens[exit_pos], highs[exit_pos], lows[exit_pos], closes[exit_pos],
+                direction, execution,
+            )
+            entry_price, exit_price = entry.price, leave.price
+            entry_cost, exit_cost = entry.cost, leave.cost
+            entry_maker, exit_maker = entry.was_maker, leave.was_maker
+
+        gross = direction * (exit_price / entry_price - 1)
+        # How much better (or worse) than the bar's open each leg actually
+        # transacted. The equity path is built from open-to-open returns, so
+        # without these the curve would ignore the price improvement a limit
+        # order earns — and the slippage a market order pays.
+        entry_edge = direction * (opens[entry_pos] - entry_price) / opens[entry_pos]
+        exit_edge = direction * (exit_price - opens[exit_pos]) / opens[exit_pos]
         hours_held = horizon * bar_hours
         funding = costs.funding_cost(direction, hours_held)
-        net = gross - costs.round_trip_cost() - funding
+        net = gross - entry_cost - exit_cost - funding
 
         rows.append(
             {
@@ -105,7 +147,13 @@ def backtest(
                 "exit_price": exit_price,
                 "size": size,
                 "gross_return": gross,
-                "cost": costs.round_trip_cost() + funding,
+                "entry_cost": entry_cost,
+                "exit_cost": exit_cost,
+                "entry_edge": entry_edge,
+                "exit_edge": exit_edge,
+                "entry_maker": entry_maker,
+                "exit_maker": exit_maker,
+                "cost": entry_cost + exit_cost + funding,
                 "net_return": net,
             }
         )
@@ -115,6 +163,12 @@ def backtest(
     summary = _summarise(trades, equity, index)
     summary["max_exposure"] = float(exposure.max()) if len(exposure) else 0.0
     summary["avg_exposure"] = float(exposure.mean()) if len(exposure) else 0.0
+    summary["n_signals"] = n_signals
+    summary["n_unfilled"] = n_unfilled
+    summary["fill_rate"] = float(1 - n_unfilled / n_signals) if n_signals else 1.0
+    if not trades.empty and "entry_maker" in trades.columns:
+        maker_legs = int(trades["entry_maker"].sum() + trades["exit_maker"].sum())
+        summary["maker_leg_share"] = maker_legs / (2 * len(trades))
     return BacktestResult(trades=trades, equity=equity, summary=summary)
 
 
@@ -153,8 +207,31 @@ def _build_equity(
     position = np.zeros(n)
     cash_flow = np.zeros(n)  # costs charged at entry, exit, and funding per bar
 
-    per_side_cost = costs.taker_fee + costs.slippage
     funding_per_bar = costs.funding_rate * (bar_hours / costs.funding_interval_hours)
+    # Each leg's cost is whatever that leg actually paid — a maker fill and a
+    # market fill cost different amounts, and assuming one rate here would make
+    # maker execution look uniformly cheap even where it crossed the spread.
+    default_side_cost = costs.taker_fee + costs.slippage
+    entry_costs = (
+        trades["entry_cost"].to_numpy()
+        if "entry_cost" in trades.columns
+        else np.full(len(trades), default_side_cost)
+    )
+    exit_costs = (
+        trades["exit_cost"].to_numpy()
+        if "exit_cost" in trades.columns
+        else np.full(len(trades), default_side_cost)
+    )
+    entry_edges = (
+        trades["entry_edge"].to_numpy()
+        if "entry_edge" in trades.columns
+        else np.zeros(len(trades))
+    )
+    exit_edges = (
+        trades["exit_edge"].to_numpy()
+        if "exit_edge" in trades.columns
+        else np.zeros(len(trades))
+    )
 
     entry_pos = index.get_indexer(trades["entry_time"])
     exit_pos = index.get_indexer(trades["exit_time"])
@@ -166,15 +243,17 @@ def _build_equity(
         trades["size"].to_numpy() if "size" in trades.columns else np.ones(len(trades))
     )
 
-    for entry, exit_, direction, size in zip(
-        entry_pos, exit_pos, directions, trade_sizes, strict=True
+    for entry, exit_, direction, size, in_cost, out_cost, in_edge, out_edge in zip(
+        entry_pos, exit_pos, directions, trade_sizes,
+        entry_costs, exit_costs, entry_edges, exit_edges, strict=True
     ):
         if entry < 0 or exit_ < 0:
             continue
         weight = slot * float(size)
         position[entry:exit_] += direction * weight
-        cash_flow[entry] += per_side_cost * weight
-        cash_flow[exit_] += per_side_cost * weight
+        # A negative cash flow is a gain: a limit filled better than the open.
+        cash_flow[entry] += (float(in_cost) - float(in_edge)) * weight
+        cash_flow[exit_] += (float(out_cost) - float(out_edge)) * weight
         # Longs pay funding, shorts receive it.
         cash_flow[entry:exit_] += direction * funding_per_bar * weight
 

@@ -11,6 +11,8 @@ import pandas as pd
 import typer
 
 from cryptopred.backtest.breakeven import analyse, format_table, round_trip_cost
+from cryptopred.backtest.engine import CostModel
+from cryptopred.backtest.execution_report import compare_execution, format_execution_comparison
 from cryptopred.backtest.runner import format_backtest, run_strategy_backtest
 from cryptopred.backtest.sizing_report import (
     compare_sizing,
@@ -325,6 +327,67 @@ def sizing(
     reports_dir.mkdir(parents=True, exist_ok=True)
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
     (reports_dir / f"sizing_{symbol}_{interval}_h{horizon}_{stamp}.txt").write_text(
+        report, encoding="utf-8"
+    )
+
+
+@app.command()
+def execution(
+    symbol: str = typer.Option("BTCUSDT", help="Symbol to evaluate."),
+    interval: str = typer.Option("1h", help="Bar interval."),
+    horizon: int = typer.Option(None, help="Label horizon in bars, overriding the config."),
+    threshold: float = typer.Option(None, help="Signal threshold, overriding the config."),
+    maker_fee: float = typer.Option(0.0002, help="Maker fee per side."),
+    n_splits: int = typer.Option(5, help="Walk-forward folds."),
+    rounds: int = typer.Option(400, help="LightGBM boosting rounds."),
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+) -> None:
+    """Do limit orders beat market orders once missed fills are counted?
+
+    The maker fee is roughly a third of the taker cost, which sharply lowers the
+    break-even accuracy. The catch is that a limit order fills only when price
+    comes to it, so it skips a biased sample of trades.
+    """
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    cfg = load_config(config)
+    horizon = horizon or cfg.labels.horizon_bars.get(interval, 24)
+    threshold = threshold if threshold is not None else cfg.strategy.signal_threshold
+
+    path = dataset_path(cfg, symbol, interval, horizon)
+    if not path.exists():
+        typer.echo(
+            f"No dataset at {path}. Run `cryptopred-dataset build --horizon {horizon}` first."
+        )
+        raise typer.Exit(code=1)
+
+    dataset = pd.read_parquet(path)
+    bars = ParquetStore(cfg.data.root / "raw").read("klines", symbol, interval)
+
+    typer.echo(f"Training on {len(dataset):,} rows, horizon {horizon} bars ...")
+    evaluation = walk_forward_evaluate(
+        dataset,
+        n_splits=n_splits,
+        horizon=horizon,
+        config=TrainConfig(num_boost_round=rounds, signal_threshold=threshold),
+    )
+    index = dataset.index[-evaluation["n_test_total"] :]
+    signals = signals_from_proba(evaluation["proba"], threshold)
+
+    costs = CostModel(
+        taker_fee=cfg.strategy.taker_fee,
+        slippage=cfg.strategy.slippage,
+        funding_rate=cfg.strategy.funding_rate,
+    )
+    results = compare_execution(
+        bars, index, signals, horizon=horizon, costs=costs, maker_fee=maker_fee
+    )
+    report = format_execution_comparison(results, symbol, horizon)
+    typer.echo(report)
+
+    reports_dir = cfg.data.root / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
+    (reports_dir / f"execution_{symbol}_{interval}_h{horizon}_{stamp}.txt").write_text(
         report, encoding="utf-8"
     )
 
