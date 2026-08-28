@@ -21,13 +21,19 @@ from cryptopred.backtest.sizing_report import (
     format_sizing_comparison,
 )
 from cryptopred.config import load_config
-from cryptopred.dataset.builder import dataset_path
+from cryptopred.dataset.builder import build_dataset, dataset_path
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.meta import signals_from_proba
 from cryptopred.models.metrics import evaluate
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.models.report import format_evaluation, verdict
 from cryptopred.models.train import TrainConfig, train_fold, walk_forward_evaluate
+from cryptopred.models.validation import (
+    FrozenConfig,
+    SymbolResult,
+    evaluate_symbol,
+    format_validation,
+)
 
 app = typer.Typer(help="Train models and run walk-forward evaluation.")
 logger = logging.getLogger(__name__)
@@ -390,6 +396,57 @@ def execution(
     (reports_dir / f"execution_{symbol}_{interval}_h{horizon}_{stamp}.txt").write_text(
         report, encoding="utf-8"
     )
+
+
+@app.command()
+def validate(
+    symbols: str = typer.Option(
+        None, help="Comma-separated symbols. Defaults to the config's symbol list."
+    ),
+    interval: str = typer.Option("1h", help="Bar interval."),
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+) -> None:
+    """Run the frozen configuration across many symbols and report the spread.
+
+    Nothing is tuned per symbol, so this validates a fixed hypothesis rather
+    than searching for a new one. The criteria were committed before the first
+    run — see docs/preregistration-multisymbol.md — and every symbol attempted
+    is reported, including the ones that fail.
+    """
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    cfg = load_config(config)
+    frozen = FrozenConfig()
+    names = [s.strip() for s in symbols.split(",")] if symbols else cfg.data.symbols
+
+    parquet = ParquetStore(cfg.data.root / "raw")
+    results = []
+    for symbol in names:
+        typer.echo(f"  {symbol} ...")
+        bars = parquet.read("klines", symbol, interval)
+        if bars.empty:
+            results.append(SymbolResult(symbol, status="skipped: no bars stored"))
+            continue
+
+        funding = parquet.read("funding", symbol, "8h")
+        dataset = build_dataset(
+            bars,
+            interval=interval,
+            horizon=frozen.horizon,
+            atr_period=cfg.labels.atr_period,
+            band_k=cfg.labels.band_k,
+            funding=funding if not funding.empty else None,
+            symbol=symbol,
+            feature_config=cfg.features,
+        )
+        results.append(evaluate_symbol(symbol, dataset, bars, frozen))
+
+    report = format_validation(results, frozen)
+    typer.echo("\n" + report)
+
+    reports_dir = cfg.data.root / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
+    (reports_dir / f"validation_{interval}_{stamp}.txt").write_text(report, encoding="utf-8")
 
 
 @app.command()
