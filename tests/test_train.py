@@ -114,3 +114,77 @@ def test_rejects_dataset_without_label_class():
     df = _learnable_dataset(n=500).drop(columns=["label_class"])
     with pytest.raises(KeyError, match="label_class"):
         walk_forward_evaluate(df, n_splits=2, horizon=4, config=TrainConfig())
+
+
+def test_oof_calibration_spreads_across_the_window_not_one_tail_block():
+    """Regression for a real failure: a final model calibrated on one recent
+    block produced a near-constant isotonic map, capping its UP probability at
+    0.45 and firing on 0.3% of bars where the folds fired on 8.4%."""
+    from cryptopred.dataset.builder import feature_columns
+    from cryptopred.models.train import fit_oof_calibrators
+
+    df = _learnable_dataset(n=6000)
+    cfg = TrainConfig(num_boost_round=30, calibration_splits=3)
+    features = feature_columns(df)
+
+    calibrators = fit_oof_calibrators(df, features, horizon=4, config=cfg)
+    assert calibrators is not None and len(calibrators) == 3
+
+    # A usable calibrator must still separate low from high inputs. The broken
+    # one returned the same value across almost the whole input range.
+    grid = np.linspace(0.05, 0.95, 19)
+    for cls, iso in enumerate(calibrators):
+        out = iso.predict(grid)
+        assert out.max() - out.min() > 0.05, f"class {cls} calibrator is nearly flat"
+
+
+def test_oof_calibrated_model_keeps_a_usable_signal_rate():
+    df = _learnable_dataset(n=6000)
+    cfg = TrainConfig(num_boost_round=40, calibration_method="oof", calibration_splits=3)
+    result = train_fold(df.iloc[:4500], df.iloc[4500:], cfg, horizon=4)
+
+    confidence = result.proba.max(axis=1)
+    assert confidence.max() > 0.6      # the map is not squashed flat
+
+
+def test_coverage_check_passes_when_the_model_matches_the_folds():
+    from cryptopred.models.train import coverage_check
+
+    df = _learnable_dataset(n=4000)
+    cfg = TrainConfig(num_boost_round=40, calibration_method="oof", calibration_splits=3)
+    result = train_fold(df.iloc[:3000], df.iloc[3000:], cfg, horizon=4)
+
+    predicted = result.proba.argmax(axis=1)
+    conf = result.proba.max(axis=1)
+    observed = float(((predicted != 1) & (conf >= 0.5)).mean())
+
+    check = coverage_check(result, df.iloc[3000:], observed, threshold=0.5)
+    assert check["ok"]
+    assert check["ratio"] < 3.0
+
+
+def test_coverage_check_catches_a_model_that_stopped_firing():
+    """The exact failure that shipped: metrics from folds, a saved model that
+    almost never signals."""
+    from cryptopred.models.train import coverage_check
+
+    df = _learnable_dataset(n=4000)
+    cfg = TrainConfig(num_boost_round=40, calibration_method="oof", calibration_splits=3)
+    result = train_fold(df.iloc[:3000], df.iloc[3000:], cfg, horizon=4)
+
+    # Folds claimed to fire on 8.4% of bars; ask the check against a model that
+    # is nowhere near that by demanding an implausible threshold.
+    check = coverage_check(result, df.iloc[3000:], expected_coverage=0.084, threshold=0.999)
+    assert not check["ok"]
+
+
+def test_coverage_check_reports_both_rates_for_the_reader():
+    from cryptopred.models.train import coverage_check
+
+    df = _learnable_dataset(n=3000)
+    cfg = TrainConfig(num_boost_round=20, calibration_method="oof", calibration_splits=3)
+    result = train_fold(df.iloc[:2200], df.iloc[2200:], cfg, horizon=4)
+
+    check = coverage_check(result, df, expected_coverage=0.08, threshold=0.5)
+    assert "expected_coverage" in check and "actual_coverage" in check
+    assert check["n_sample"] > 0

@@ -27,7 +27,13 @@ from cryptopred.models.meta import signals_from_proba
 from cryptopred.models.metrics import evaluate
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.models.report import format_evaluation, verdict
-from cryptopred.models.train import TrainConfig, train_fold, walk_forward_evaluate
+from cryptopred.models.train import (
+    COVERAGE_TOLERANCE,
+    TrainConfig,
+    coverage_check,
+    train_fold,
+    walk_forward_evaluate,
+)
 from cryptopred.models.validation import (
     FrozenConfig,
     SymbolResult,
@@ -131,7 +137,34 @@ def train(
     # Final model: fit on everything except the last horizon bars, whose labels
     # depend on prices that do not exist yet.
     final_train = dataset.iloc[: -horizon or None]
-    result = train_fold(final_train, final_train.tail(1), train_config)
+    # Calibrate the final model from out-of-fold runs. The tail-block method is
+    # fine inside a fold but degenerate here, where the tail is one recent regime.
+    final_config = TrainConfig(
+        **{**train_config.__dict__, "calibration_method": "oof"}
+    )
+    result = train_fold(final_train, final_train.tail(1), final_config, horizon=horizon)
+
+    # The metrics above came from fold models. This is a different fit, and it
+    # must behave like them or the numbers do not describe what gets deployed.
+    check = coverage_check(
+        result, final_train, evaluation["model"]["coverage"], threshold
+    )
+    typer.echo(
+        f"\nCoverage check: folds fired on {check['expected_coverage']:.2%} of bars, "
+        f"the saved model fires on {check['actual_coverage']:.2%} "
+        f"(ratio {check['ratio']:.1f}x)"
+    )
+    if not check["ok"]:
+        typer.echo(
+            "\nRefusing to save: the final model does not behave like the models "
+            "that were evaluated.\n"
+            "Its signal rate differs by more than "
+            f"{int(COVERAGE_TOLERANCE)}x, so the metrics above do not describe it. "
+            "This is usually a calibration failure — check the isotonic maps before "
+            "trusting anything downstream."
+        )
+        raise typer.Exit(code=1)
+
     registry = ModelRegistry(cfg.data.root / "models")
     metrics = dict(evaluation["model"])
     metrics["gate_decision"] = decision["decision"]

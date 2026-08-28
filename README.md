@@ -7,6 +7,59 @@ dashboard web và bot paper trading.
 **Không có giao dịch tiền thật.** Không có chỗ nhập API key sàn, không có code
 đặt lệnh. Đọc [docs/findings.md](docs/findings.md) để biết vì sao.
 
+## ĐÍNH CHÍNH — quy tắc ngưỡng là lỗi hiệu chỉnh, không phải chiến lược
+
+**Mọi con số lợi nhuận báo cáo trước đây đều bị thổi phồng, do lỗi trong dự án
+này chứ không phải do thị trường.**
+
+Tín hiệu được chọn bằng ngưỡng xác suất cố định 0.60. Điều đó giả định thang xác
+suất có ý nghĩa như nhau ở mọi fold — sai. Hiệu chỉnh isotonic trên ít dữ liệu
+thì overfit và cho xác suất cực đoan; trên nhiều dữ liệu thì hội tụ và hiếm khi
+rời vùng giữa. Cùng model, cùng ngưỡng:
+
+| Fold | Dòng hiệu chỉnh | Tỉ lệ nến giao dịch |
+|---|---|---|
+| 0 | 1.412 | **26.6%** |
+| 1 | 2.919 | 11.1% |
+| 2 | 4.426 | 1.0% |
+| 3 | 5.933 | **0.03%** |
+| 4 | 7.439 | 3.3% |
+
+"Coverage 8.4%" là trung bình gộp bị fold 0 chi phối — riêng fold 0 chiếm **63%
+tổng tín hiệu**, và fold 0 chính là giai đoạn bull run 2020–2022. Chiến lược vô
+tình dồn vào giai đoạn tốt nhất rồi im lặng ở phần còn lại.
+
+**Đó là market timing do bug, không phải kỹ năng.**
+
+### Con số đã sửa
+
+Chọn tín hiệu giờ theo **thứ hạng** — giao dịch 8% nến tự tin nhất *trong từng
+fold* — không phụ thuộc thang xác suất:
+
+| | Ngưỡng 0.60 (sai) | Top 8%/fold (đúng) |
+|---|---|---|
+| Tín hiệu | 4.217 | 4.020 |
+| Sign accuracy | 58.90% | 58.36% |
+| Coverage từng fold | 26.6/11.1/1.0/0.03/3.3% | 8/8/8/8/8% |
+| **Lợi nhuận** | **+84.7%** | **+25.9%** |
+| Max drawdown | −16.4% | −14.8% |
+| Phí gấp đôi | +61.4% | **+8.3%** |
+| Short | — | 855 lệnh, thắng 54.0%, **+535 USDT** |
+| Hai chiều | có | **có** |
+
+Gần cùng số tín hiệu, cùng độ chính xác, lợi nhuận còn **một phần ba**.
+
+**Còn giữ được:** độ chính xác hướng (56.5–58.4% ở mọi mức coverage) và kết quả
+20 coin — vì chúng đo accuracy chứ không đo cách chọn tín hiệu. Chiều short vẫn
+có lãi.
+
+**Mất:** mọi con số lợi nhuận cũ (+70.9%, +84.7%, +109.4%, +118.2%). "Vùng ổn
+định" ngưỡng 0.55–0.70 thực ra chỉ đo mỗi ngưỡng chứa bao nhiêu fold 0.
+
+Bug bị bắt vì hệ thống live **không ra tín hiệu nào trong 2 ngày**. Giờ có cổng
+kiểm tra coverage trước khi lưu model: lệch quá 3 lần so với lúc đánh giá thì
+từ chối lưu.
+
 ## Kết quả hiện tại, nói thẳng
 
 Model **có** tín hiệu dự đoán thật: độ chính xác tăng đều theo độ tin cậy nó tự

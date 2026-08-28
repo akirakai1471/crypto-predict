@@ -4,6 +4,85 @@ Date: 2026-08-26. All numbers are out-of-sample, from purged walk-forward
 cross-validation with a 4-fold-plus purge/embargo split, on Binance USDT
 perpetual data from 2019 to 2026.
 
+## CORRECTION — the threshold rule was a calibration artefact
+
+**Every return figure recorded below the "What the model actually knows" section
+was inflated, and the cause was a mistake in this project, not in the market.**
+The corrected numbers are here; the original text is left in place underneath so
+the error stays visible rather than being quietly overwritten.
+
+### What happened
+
+Signals were selected by a fixed probability threshold of 0.60. That assumes the
+probability scale means the same thing in every fold. It does not. Isotonic
+calibration fitted on a small window overfits and emits extreme probabilities;
+fitted on a large one it converges and rarely leaves the middle. Coverage across
+the five walk-forward folds, same model, same threshold:
+
+| Fold | Calibration rows | Bars traded |
+|---|---|---|
+| 0 | 1,412 | **26.6%** |
+| 1 | 2,919 | 11.1% |
+| 2 | 4,426 | 1.0% |
+| 3 | 5,933 | **0.03%** |
+| 4 | 7,439 | 3.3% |
+
+The reported "8.4% coverage" was a pooled average dominated by fold 0, which
+alone supplied **63% of all signals**. Fold 0 is 2020-12 to 2022-01 — the largest
+bull run in the sample. The strategy was therefore concentrated in the best
+period and nearly absent from the rest, not by design but by accident.
+
+That is market timing produced by a calibration bug, and it inflated every
+return figure derived from it.
+
+### The corrected result
+
+Selection is now by rank — trade the most confident 8% of bars *within each
+fold* — which is invariant to the probability scale. Same model, same horizon,
+same execution:
+
+| | Threshold 0.60 (wrong) | Top 8% per fold (correct) |
+|---|---|---|
+| Signals | 4,217 | 4,020 |
+| Sign accuracy | 58.90% | 58.36% |
+| Coverage per fold | 26.6 / 11.1 / 1.0 / 0.03 / 3.3% | 8 / 8 / 8 / 8 / 8% |
+| **Total return** | **+84.7%** | **+25.9%** |
+| Max drawdown | −16.4% | −14.8% |
+| Sharpe | — | 0.39 |
+| At doubled fees | +61.4% | **+8.3%** |
+| Long side | — | 3,165 trades, 53.6% win, +2,202 USDT |
+| Short side | — | 855 trades, 54.0% win, **+535 USDT** |
+| Directional verdict | two-sided | **two-sided** |
+
+Nearly identical signal count and accuracy, a third of the return. The
+difference was never skill.
+
+### What survives, and what does not
+
+**Survives.** Directional accuracy is unaffected — it sits at 56.5%, 58.4% and
+57.0% at 4%, 8% and 15% coverage, stable because ranking does not change which
+bars look most confident. The 20-symbol result (mean 53.70%, 17/20 above 50%)
+measures accuracy, not selection, and stands. The short side still earns.
+
+**Does not survive.** Every headline return: +70.9%, +84.7%, +109.4%, +118.2%.
+The threshold plateau across 0.55–0.70 that looked like evidence of robustness
+was measuring how much fold 0 each threshold happened to include. The doubled-fee
+cushion is +8.3%, not +61.4%.
+
+**Unclear.** The maker-versus-taker comparison and the sizing study were both run
+under the broken selection rule. Their *relative* conclusions may hold, since
+both arms used the same signals, but their absolute figures do not and they have
+not been re-run.
+
+### Why this was missed for so long
+
+Every gate in the project checked whether the *strategy* was sound. Nothing
+checked whether the *rule that produced the signals* meant the same thing across
+folds. It was only caught because the live system produced zero signals in two
+days, which forced a comparison between the served model and the evaluated ones.
+A coverage check now runs before any model is saved, and refuses to store a model
+whose signal rate differs from its evaluation by more than 3x.
+
 ## Headline
 
 The model has **real predictive signal**. Whether that signal is a **tradeable

@@ -40,6 +40,15 @@ class TrainConfig:
     # calibrator. It sits at the end of the training window, closest in time to
     # the test window, so calibration reflects the most recent regime.
     calibration_frac: float = 0.15
+    # "holdout" fits the calibrator on that single contiguous tail block, which
+    # is fine inside a fold but dangerous for a final model trained on all of
+    # history: the tail is then one recent regime, and isotonic regression fitted
+    # on it can flatten into a near-constant map. That happened — a saved model
+    # capped its UP probability at 0.45 and produced signals on 0.3% of bars
+    # where the folds produced 8.4%. "oof" spreads calibration across the whole
+    # window using inner out-of-fold predictions instead.
+    calibration_method: str = "holdout"
+    calibration_splits: int = 4
     signal_threshold: float = 0.5
     seed: int = 42
     extra_params: dict[str, Any] = field(default_factory=dict)
@@ -109,8 +118,49 @@ def _apply_calibrators(
     )
 
 
+def fit_oof_calibrators(
+    train: pd.DataFrame, features: list[str], horizon: int, config: TrainConfig
+) -> list[IsotonicRegression] | None:
+    """Fit calibrators on out-of-fold predictions spanning the whole window.
+
+    Each inner fold trains on its own past and predicts its own future, so every
+    calibration point is an honest out-of-sample probability, and the points come
+    from several different market regimes rather than one recent block.
+    """
+    cv = PurgedWalkForward(
+        n_splits=config.calibration_splits, horizon=horizon, embargo_frac=0.01
+    )
+    raw_parts: list[np.ndarray] = []
+    label_parts: list[np.ndarray] = []
+
+    inner = TrainConfig(**{**config.__dict__, "calibrate": False})
+    for train_idx, test_idx in cv.split(train.index):
+        fold_train, fold_test = train.iloc[train_idx], train.iloc[test_idx]
+        dataset = lgb.Dataset(
+            fold_train[features], label=fold_train["label_class"], free_raw_data=False
+        )
+        booster = lgb.train(
+            inner.lgb_params(), dataset, num_boost_round=inner.num_boost_round
+        )
+        raw_parts.append(np.asarray(booster.predict(fold_test[features])))
+        label_parts.append(fold_test["label_class"].to_numpy())
+
+    if not raw_parts:
+        return None
+
+    raw = np.concatenate(raw_parts)
+    labels = np.concatenate(label_parts)
+
+    calibrators = []
+    for cls in range(N_CLASSES):
+        iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+        iso.fit(raw[:, cls], (labels == cls).astype(float))
+        calibrators.append(iso)
+    return calibrators
+
+
 def train_fold(
-    train: pd.DataFrame, test: pd.DataFrame, config: TrainConfig
+    train: pd.DataFrame, test: pd.DataFrame, config: TrainConfig, horizon: int = 24
 ) -> FoldResult:
     """Fit one model on `train` and predict `test`."""
     features = feature_columns(train)
@@ -118,6 +168,28 @@ def train_fold(
 
     fit_df = train
     calibrators = None
+
+    if config.calibrate and config.calibration_method == "oof":
+        # Train the booster on everything; calibrate from inner out-of-fold runs.
+        dataset = lgb.Dataset(
+            train[features], label=train["label_class"], free_raw_data=False
+        )
+        booster = lgb.train(
+            config.lgb_params(), dataset, num_boost_round=config.num_boost_round
+        )
+        calibrators = fit_oof_calibrators(train, features, horizon, config)
+        raw = np.asarray(booster.predict(test[features]))
+        proba = _apply_calibrators(raw, calibrators) if calibrators else raw
+        gains = booster.feature_importance(importance_type="gain")
+        return FoldResult(
+            proba=proba,
+            y_true=test["label_class"].to_numpy(),
+            booster=booster,
+            calibrators=calibrators,
+            importance=dict(zip(features, (float(g) for g in gains), strict=True)),
+            features=features,
+        )
+
     if config.calibrate and config.calibration_frac > 0:
         split = int(len(train) * (1 - config.calibration_frac))
         fit_df, holdout = train.iloc[:split], train.iloc[split:]
@@ -239,4 +311,48 @@ def walk_forward_evaluate(
             name: np.concatenate(chunks) for name, chunks in baseline_proba.items()
         },
         "n_test_total": int(len(y_true)),
+    }
+
+
+# A saved model whose signal rate differs from the evaluated one by more than
+# this factor is not the model that was evaluated, whatever the metrics said.
+COVERAGE_TOLERANCE = 3.0
+
+
+def coverage_check(
+    result: FoldResult,
+    dataset: pd.DataFrame,
+    expected_coverage: float,
+    threshold: float,
+    sample: int = 3000,
+) -> dict[str, Any]:
+    """Does the final model fire as often as the folds did?
+
+    Metrics come from fold models; the registry stores a differently-fitted final
+    model. Nothing checks that the two behave alike, and they can diverge badly:
+    a final model calibrated on one recent block once produced signals on 0.3% of
+    bars where the folds produced 8.4%, which would have left a live test unable
+    to record anything at all while every report still looked healthy.
+    """
+    recent = dataset.tail(sample)
+    features = [f for f in result.features if f in recent.columns]
+    raw = np.asarray(result.booster.predict(recent[features]))
+    proba = _apply_calibrators(raw, result.calibrators) if result.calibrators else raw
+
+    predicted = proba.argmax(axis=1)
+    confidence = proba.max(axis=1)
+    actual = float(((predicted != 1) & (confidence >= threshold)).mean())
+
+    if expected_coverage <= 0:
+        ratio = float("inf") if actual > 0 else 1.0
+    else:
+        ratio = actual / expected_coverage if actual > 0 else float("inf")
+        ratio = max(ratio, 1 / ratio) if actual > 0 else float("inf")
+
+    return {
+        "expected_coverage": expected_coverage,
+        "actual_coverage": actual,
+        "ratio": ratio,
+        "ok": bool(ratio <= COVERAGE_TOLERANCE),
+        "n_sample": int(len(recent)),
     }
