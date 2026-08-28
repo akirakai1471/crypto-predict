@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.models.train import TrainConfig, train_fold
@@ -221,3 +222,32 @@ def test_index_frame_lists_all_models(tmp_path):
     index = registry.index()
     assert isinstance(index, pd.DataFrame)
     assert set(index["symbol"]) == {"BTCUSDT", "ETHUSDT"}
+
+
+def test_registry_stores_the_trading_rule_with_the_model(tmp_path):
+    """A live bar cannot be ranked against a distribution it does not have, so
+    the rank rule has to arrive as a number computed when it was available."""
+    _, result = _fold_result()
+    registry = ModelRegistry(tmp_path)
+    version = registry.save(
+        result, symbol="BTCUSDT", interval="1h", metrics={}, config=TrainConfig(),
+        margin_cutoff=0.1234, signal_coverage=0.08,
+    )
+
+    bundle = registry.load(version)
+    assert bundle.metadata["margin_cutoff"] == pytest.approx(0.1234)
+    assert bundle.metadata["signal_coverage"] == pytest.approx(0.08)
+
+    meta = json.loads((tmp_path / version / "metadata.json").read_text(encoding="utf-8"))
+    assert meta["margin_cutoff"] == pytest.approx(0.1234)
+
+
+def test_a_model_saved_without_a_cutoff_records_none(tmp_path):
+    """Older models predate the rule; the predictor must see None rather than a
+    stale threshold it would silently trade on."""
+    _, result = _fold_result()
+    registry = ModelRegistry(tmp_path)
+    version = registry.save(
+        result, symbol="BTCUSDT", interval="1h", metrics={}, config=TrainConfig()
+    )
+    assert registry.load(version).metadata["margin_cutoff"] is None

@@ -112,13 +112,19 @@ class Predictor:
     def _to_prediction(
         self, symbol: str, interval: str, bar: pd.Series, proba: np.ndarray
     ) -> Prediction:
-        threshold = self.cfg.strategy.signal_threshold
         predicted = int(np.argmax(proba))
         confidence = float(np.max(proba))
 
+        # The rule is a rank, converted offline into a concrete margin cutoff and
+        # stored with the model. A live bar cannot be ranked against anything —
+        # there is only one of it — so the cutoff has to travel with the model
+        # that produced the distribution it came from.
+        cutoff = self.bundle.metadata.get("margin_cutoff")
         signal = 0
-        if confidence >= threshold and predicted != FLAT:
-            signal = 1 if predicted == UP else -1
+        if cutoff is not None and predicted != FLAT:
+            margin = abs(float(proba[UP]) - float(proba[DOWN]))
+            if margin >= float(cutoff):
+                signal = 1 if predicted == UP else -1
 
         return Prediction(
             symbol=symbol,

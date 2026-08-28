@@ -154,11 +154,12 @@ def test_coverage_check_passes_when_the_model_matches_the_folds():
     cfg = TrainConfig(num_boost_round=40, calibration_method="oof", calibration_splits=3)
     result = train_fold(df.iloc[:3000], df.iloc[3000:], cfg, horizon=4)
 
-    predicted = result.proba.argmax(axis=1)
-    conf = result.proba.max(axis=1)
-    observed = float(((predicted != 1) & (conf >= 0.5)).mean())
+    from cryptopred.models.selection import margin_cutoff, signals_from_margin
 
-    check = coverage_check(result, df.iloc[3000:], observed, threshold=0.5)
+    cutoff = margin_cutoff(result.proba, coverage=0.10)
+    observed = float((signals_from_margin(result.proba, cutoff) != 0).mean())
+
+    check = coverage_check(result, df.iloc[3000:], observed, cutoff=cutoff)
     assert check["ok"]
     assert check["ratio"] < 3.0
 
@@ -172,9 +173,9 @@ def test_coverage_check_catches_a_model_that_stopped_firing():
     cfg = TrainConfig(num_boost_round=40, calibration_method="oof", calibration_splits=3)
     result = train_fold(df.iloc[:3000], df.iloc[3000:], cfg, horizon=4)
 
-    # Folds claimed to fire on 8.4% of bars; ask the check against a model that
-    # is nowhere near that by demanding an implausible threshold.
-    check = coverage_check(result, df.iloc[3000:], expected_coverage=0.084, threshold=0.999)
+    # Folds claimed 8.4% coverage; a cutoff nothing can reach means the saved
+    # model fires on nothing, which is the failure that shipped.
+    check = coverage_check(result, df.iloc[3000:], expected_coverage=0.084, cutoff=0.99)
     assert not check["ok"]
 
 
@@ -185,6 +186,9 @@ def test_coverage_check_reports_both_rates_for_the_reader():
     cfg = TrainConfig(num_boost_round=20, calibration_method="oof", calibration_splits=3)
     result = train_fold(df.iloc[:2200], df.iloc[2200:], cfg, horizon=4)
 
-    check = coverage_check(result, df, expected_coverage=0.08, threshold=0.5)
+    from cryptopred.models.selection import margin_cutoff
+
+    cutoff = margin_cutoff(result.proba, coverage=0.08)
+    check = coverage_check(result, df, expected_coverage=0.08, cutoff=cutoff)
     assert "expected_coverage" in check and "actual_coverage" in check
     assert check["n_sample"] > 0

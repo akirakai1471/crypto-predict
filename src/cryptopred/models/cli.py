@@ -27,6 +27,7 @@ from cryptopred.models.meta import signals_from_proba
 from cryptopred.models.metrics import evaluate
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.models.report import format_evaluation, verdict
+from cryptopred.models.selection import margin_cutoff
 from cryptopred.models.train import (
     COVERAGE_TOLERANCE,
     TrainConfig,
@@ -146,12 +147,24 @@ def train(
 
     # The metrics above came from fold models. This is a different fit, and it
     # must behave like them or the numbers do not describe what gets deployed.
+    # The cutoff comes from the LAST fold's out-of-sample probabilities: the
+    # most recent conditions the model was honestly tested under. Deriving it
+    # from in-sample margins would set the bar too high, which is precisely the
+    # failure this replaces.
+    fold_sizes = [f["n_test"] for f in evaluation["folds"]]
+    last_fold_proba = evaluation["proba"][-fold_sizes[-1] :]
+    cutoff = margin_cutoff(last_fold_proba, cfg.strategy.signal_coverage)
+
     check = coverage_check(
-        result, final_train, evaluation["model"]["coverage"], threshold
+        result, final_train, cfg.strategy.signal_coverage, cutoff
     )
     typer.echo(
-        f"\nCoverage check: folds fired on {check['expected_coverage']:.2%} of bars, "
-        f"the saved model fires on {check['actual_coverage']:.2%} "
+        f"\nSignal rule: trade the top {cfg.strategy.signal_coverage:.0%} by directional "
+        f"margin, cutoff {cutoff:.4f}"
+    )
+    typer.echo(
+        f"Coverage check: target {check['expected_coverage']:.2%}, "
+        f"saved model fires on {check['actual_coverage']:.2%} "
         f"(ratio {check['ratio']:.1f}x)"
     )
     if not check["ok"]:
@@ -168,8 +181,14 @@ def train(
     registry = ModelRegistry(cfg.data.root / "models")
     metrics = dict(evaluation["model"])
     metrics["gate_decision"] = decision["decision"]
+    metrics["margin_cutoff"] = cutoff
+    metrics["signal_coverage"] = cfg.strategy.signal_coverage
     metrics["gate_reason"] = decision["reason"]
-    if override:
+    # Only record an override that was actually needed. Marking a model that
+    # passed its gate as overridden would put a permanent warning on the
+    # dashboard for a model that earned its place.
+    override_used = bool(override) and decision["decision"] != "GO"
+    if override_used:
         metrics["override_reason"] = override
 
     version = registry.save(
@@ -179,12 +198,17 @@ def train(
         metrics=metrics,
         config=train_config,
         n_train_rows=len(final_train),
+        margin_cutoff=cutoff,
+        signal_coverage=cfg.strategy.signal_coverage,
     )
     typer.echo(f"\nSaved model {version}")
-    if override:
+    if override_used:
         typer.echo(
-            f"  SAVED UNDER OVERRIDE — gate said {decision['decision']}: {decision['reason']}"
+            f"  SAVED UNDER OVERRIDE — gate said {decision['decision']}: "
+            f"{decision['reason']}"
         )
+    elif override:
+        typer.echo("  (--override was not needed: the gate passed)")
 
 
 @app.command()

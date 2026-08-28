@@ -40,14 +40,16 @@ class TrainConfig:
     # calibrator. It sits at the end of the training window, closest in time to
     # the test window, so calibration reflects the most recent regime.
     calibration_frac: float = 0.15
-    # "holdout" fits the calibrator on that single contiguous tail block, which
-    # is fine inside a fold but dangerous for a final model trained on all of
-    # history: the tail is then one recent regime, and isotonic regression fitted
-    # on it can flatten into a near-constant map. That happened — a saved model
-    # capped its UP probability at 0.45 and produced signals on 0.3% of bars
-    # where the folds produced 8.4%. "oof" spreads calibration across the whole
-    # window using inner out-of-fold predictions instead.
-    calibration_method: str = "holdout"
+    # "holdout" fits the calibrator on a single contiguous tail block. That
+    # produces a different probability scale depending on how much data the block
+    # holds, and the scale is what a trading rule is expressed in: coverage ran
+    # 26.6% to 0.03% across folds under an identical threshold.
+    #
+    # "oof" spreads calibration across the whole window via inner out-of-fold
+    # predictions. It is the default because the folds and the deployed model
+    # must share one scale — otherwise the evaluation measures a model that is
+    # not the one being shipped, which is exactly how this went wrong.
+    calibration_method: str = "oof"
     calibration_splits: int = 4
     signal_threshold: float = 0.5
     seed: int = 42
@@ -323,7 +325,7 @@ def coverage_check(
     result: FoldResult,
     dataset: pd.DataFrame,
     expected_coverage: float,
-    threshold: float,
+    cutoff: float,
     sample: int = 3000,
 ) -> dict[str, Any]:
     """Does the final model fire as often as the folds did?
@@ -334,14 +336,14 @@ def coverage_check(
     bars where the folds produced 8.4%, which would have left a live test unable
     to record anything at all while every report still looked healthy.
     """
+    from cryptopred.models.selection import signals_from_margin
+
     recent = dataset.tail(sample)
     features = [f for f in result.features if f in recent.columns]
     raw = np.asarray(result.booster.predict(recent[features]))
     proba = _apply_calibrators(raw, result.calibrators) if result.calibrators else raw
 
-    predicted = proba.argmax(axis=1)
-    confidence = proba.max(axis=1)
-    actual = float(((predicted != 1) & (confidence >= threshold)).mean())
+    actual = float((signals_from_margin(proba, cutoff) != 0).mean())
 
     if expected_coverage <= 0:
         ratio = float("inf") if actual > 0 else 1.0

@@ -72,6 +72,8 @@ class ModelRegistry:
         metrics: dict[str, Any],
         config: TrainConfig,
         n_train_rows: int | None = None,
+        margin_cutoff: float | None = None,
+        signal_coverage: float | None = None,
     ) -> str:
         # Millisecond precision so two saves in the same second stay distinct.
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")[:-3]
@@ -92,6 +94,12 @@ class ModelRegistry:
             "features": result.features,
             "n_features": len(result.features),
             "n_train_rows": n_train_rows,
+            # The trading rule travels with the model. A live bar cannot be
+            # ranked against a distribution it does not have, so the rank rule
+            # has to arrive as a concrete number computed when the distribution
+            # was available.
+            "margin_cutoff": margin_cutoff,
+            "signal_coverage": signal_coverage,
             "metrics": metrics,
             "config": asdict(config),
             "calibrated": result.calibrators is not None,

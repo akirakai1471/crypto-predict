@@ -80,3 +80,51 @@ def coverage_by_fold(signals: np.ndarray, fold_ids: np.ndarray) -> dict[int, flo
         int(fold): float((signals[fold_ids == fold] != 0).mean())
         for fold in np.unique(fold_ids)
     }
+
+
+def directional_margin(proba: np.ndarray) -> np.ndarray:
+    """Confidence in a direction: how much one side outweighs the other.
+
+    Bars whose most likely outcome is FLAT get -inf, so they are never selected
+    at any rank.
+    """
+    margin = np.abs(proba[:, UP] - proba[:, DOWN])
+    return np.where(proba.argmax(axis=1) == FLAT, -np.inf, margin)
+
+
+def margin_cutoff(proba: np.ndarray, coverage: float) -> float:
+    """The margin a bar must reach to land in the top `coverage` fraction.
+
+    Live prediction sees one bar at a time and cannot rank it against anything,
+    so the rank rule has to be converted into a concrete number once, offline.
+    The distribution it is computed from must be out-of-sample: margins measured
+    on data the model was fitted to are inflated, which would set the bar too
+    high and starve the live system of signals — the failure this whole change
+    exists to fix.
+    """
+    if not 0 < coverage <= 1:
+        raise ValueError(f"coverage must be in (0, 1], got {coverage}")
+
+    margins = directional_margin(proba)
+    finite = margins[np.isfinite(margins)]
+    if finite.size == 0:
+        return float("inf")
+
+    # Coverage is a fraction of ALL bars, not of the directional ones. Taking the
+    # quantile over the finite subset alone would select too many, because the
+    # FLAT bars silently drop out of the denominator.
+    n_take = int(round(coverage * len(proba)))
+    if n_take >= finite.size:
+        return float(finite.min())
+    if n_take <= 0:
+        return float("inf")
+    return float(np.quantile(finite, 1.0 - n_take / finite.size))
+
+
+def signals_from_margin(proba: np.ndarray, cutoff: float) -> np.ndarray:
+    """Apply a stored cutoff. This is the rule the live system runs."""
+    margins = directional_margin(proba)
+    take = np.isfinite(margins) & (margins >= cutoff)
+    signal = np.zeros(len(proba), dtype=int)
+    signal[take] = np.where(proba[take, UP] > proba[take, DOWN], 1, -1)
+    return signal

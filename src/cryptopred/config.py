@@ -48,6 +48,13 @@ class ExecutionConfig(BaseModel):
 class StrategyConfig(BaseModel):
     """Trading rules applied on top of model probabilities."""
 
+    # Fraction of bars to trade, applied by rank. A fixed probability threshold
+    # was used here until it turned out to select 26.6% of one fold and 0.03% of
+    # another with the same model — see docs/findings.md. Rank is invariant to
+    # the probability scale; a threshold is not.
+    signal_coverage: float = 0.08
+    # Kept only so older reports and the dashboard keep rendering. Nothing in
+    # the trading path reads it any more.
     signal_threshold: float = 0.60
     taker_fee: float = 0.0005
     slippage: float = 0.0002

@@ -18,11 +18,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from cryptopred.backtest.engine import CostModel, backtest
 from cryptopred.backtest.execution import ExecutionModel
-from cryptopred.models.meta import signals_from_proba
+from cryptopred.models.selection import signals_by_quantile_per_fold
 from cryptopred.models.train import TrainConfig, walk_forward_evaluate
 from cryptopred.paper.replay import SideStats, two_sided_verdict
 
@@ -35,9 +36,16 @@ class FrozenConfig:
     """The configuration under test. Nothing here varies by symbol."""
 
     horizon: int = 24
-    threshold: float = 0.60
+    # Fraction of bars to trade, applied by rank within each fold. This replaced
+    # a fixed 0.60 probability threshold, which selected 26.6% of one fold and
+    # 0.03% of another with the same model — see docs/findings.md.
+    coverage: float = 0.08
     n_splits: int = 5
     rounds: int = 400
+    # Inner folds for out-of-fold calibration. Three rather than four keeps a
+    # twenty-symbol run tractable; the scale-invariance of rank selection means
+    # the exact number matters far less than it did under a threshold.
+    calibration_splits: int = 3
     taker_fee: float = 0.0005
     maker_fee: float = 0.0002
     slippage: float = 0.0002
@@ -117,11 +125,18 @@ def evaluate_symbol(
         n_splits=config.n_splits,
         horizon=config.horizon,
         config=TrainConfig(
-            num_boost_round=config.rounds, signal_threshold=config.threshold
+            num_boost_round=config.rounds,
+            calibration_method="oof",
+            calibration_splits=config.calibration_splits,
         ),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
-    signals = signals_from_proba(evaluation["proba"], config.threshold)
+    fold_ids = np.concatenate(
+        [np.full(f["n_test"], f["fold"]) for f in evaluation["folds"]]
+    )
+    signals = signals_by_quantile_per_fold(
+        evaluation["proba"], fold_ids, coverage=config.coverage
+    )
 
     window = bars.loc[index.min() : index.max()]
     frame = pd.DataFrame({"signal": signals}, index=index)
@@ -156,11 +171,7 @@ def evaluate_symbol(
     taken = signals != 0
     sign_acc = None
     if taken.any():
-        import numpy as np
-
-        sign_acc = float(
-            (np.sign(signals[taken]) == np.sign(forward[taken])).mean()
-        )
+        sign_acc = float((np.sign(signals[taken]) == np.sign(forward[taken])).mean())
 
     return SymbolResult(
         symbol,
@@ -217,7 +228,7 @@ def format_validation(results: list[SymbolResult], config: FrozenConfig) -> str:
         "=" * 104,
         "MULTI-SYMBOL VALIDATION — one frozen configuration, no per-symbol tuning",
         "=" * 104,
-        f"horizon {config.horizon} bars   threshold {config.threshold:.2f}   "
+        f"horizon {config.horizon} bars   top {config.coverage:.0%} by rank   "
         f"maker {config.limit_offset * 100:.2f}% chase, strict fill   "
         f"{config.n_splits} folds   {config.rounds} rounds",
         "Criteria fixed in advance: docs/preregistration-multisymbol.md",

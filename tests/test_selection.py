@@ -128,3 +128,57 @@ def test_coverage_by_fold_reports_each_fold():
     signals = np.array([1, 0, -1, 0, 0, 1])
     folds = np.array([0, 0, 0, 1, 1, 1])
     assert coverage_by_fold(signals, folds) == {0: pytest.approx(2 / 3), 1: pytest.approx(1 / 3)}
+
+
+def test_margin_cutoff_reproduces_the_requested_coverage():
+    from cryptopred.models.selection import margin_cutoff, signals_from_margin
+
+    rng = np.random.default_rng(10)
+    proba = rng.dirichlet([2, 1, 2], 5000)
+    cutoff = margin_cutoff(proba, coverage=0.08)
+    signals = signals_from_margin(proba, cutoff)
+    assert (signals != 0).mean() == pytest.approx(0.08, abs=0.01)
+
+
+def test_margin_cutoff_matches_the_rank_rule():
+    from cryptopred.models.selection import margin_cutoff, signals_from_margin
+
+    rng = np.random.default_rng(11)
+    proba = rng.dirichlet([2, 1, 2], 2000)
+    by_rank = signals_by_quantile(proba, coverage=0.10)
+    by_cutoff = signals_from_margin(proba, margin_cutoff(proba, 0.10))
+    # the two rules select essentially the same bars
+    agree = (by_rank == by_cutoff).mean()
+    assert agree > 0.99
+
+
+def test_a_flat_bar_is_never_selected_by_a_cutoff():
+    from cryptopred.models.selection import signals_from_margin
+
+    proba = _proba([[0.05, 0.90, 0.05]])
+    assert signals_from_margin(proba, cutoff=0.0)[0] == 0
+
+
+def test_cutoff_on_all_flat_probabilities_is_infinite():
+    from cryptopred.models.selection import margin_cutoff
+
+    proba = _proba([[0.1, 0.8, 0.1], [0.2, 0.6, 0.2]])
+    assert margin_cutoff(proba, 0.5) == float("inf")
+
+
+def test_a_higher_cutoff_selects_fewer_bars():
+    from cryptopred.models.selection import margin_cutoff, signals_from_margin
+
+    rng = np.random.default_rng(12)
+    proba = rng.dirichlet([2, 1, 2], 3000)
+    loose = signals_from_margin(proba, margin_cutoff(proba, 0.20))
+    strict = signals_from_margin(proba, margin_cutoff(proba, 0.04))
+    assert (strict != 0).sum() < (loose != 0).sum()
+
+
+def test_cutoff_rejects_a_nonsense_coverage():
+    from cryptopred.models.selection import margin_cutoff
+
+    proba = _proba([[0.1, 0.1, 0.8]])
+    with pytest.raises(ValueError, match="coverage"):
+        margin_cutoff(proba, coverage=0.0)

@@ -108,6 +108,15 @@ def test_report_names_the_preregistration():
     assert "preregistration" in text
 
 
+def test_frozen_config_selects_by_rank_not_by_a_threshold():
+    """A fixed probability threshold selected 26.6% of one fold and 0.03% of
+    another with the same model. Coverage is scale-invariant."""
+    cfg = FrozenConfig()
+    assert hasattr(cfg, "coverage")
+    assert not hasattr(cfg, "threshold")
+    assert 0 < cfg.coverage < 1
+
+
 def test_frozen_config_execution_is_maker_and_chases():
     cfg = FrozenConfig()
     ex = cfg.execution()
