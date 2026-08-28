@@ -255,12 +255,22 @@ không chỉnh gì theo từng coin.
 
 Nhưng bên dưới có phát hiện mạnh hơn:
 
-| | |
-|---|---|
-| Sign accuracy trung bình 20 coin | **53.70%** |
-| Khoảng tin cậy 95% | **[51.81%, 55.58%]** — không chứa 50% |
-| Coin trên 50% | **17/20** (p = 0.0013) |
-| **Bỏ BTC** (coin dùng tinh chỉnh) | **16/19** (p = 0.0022), TB 53.40% |
+| | Quy tắc thứ hạng | Quy tắc ngưỡng (cũ) |
+|---|---|---|
+| Sign accuracy TB 20 coin | **53.98%** | 53.70% |
+| Khoảng tin cậy 95% | **[52.78%, 55.19%]** | [51.81%, 55.58%] |
+| Coin trên 50% | **18/20** (p = 0.0002) | 17/20 (p = 0.0013) |
+| **Bỏ BTC** | **17/19** (p = 0.0004) | 16/19 (p = 0.0022) |
+
+Chạy lại toàn bộ bằng quy tắc mới: vẫn **7/20 đạt (35%)**, nhưng **danh sách coin
+đạt đổi hẳn** — chỉ trùng 4/7. *Bao nhiêu* coin đạt thì ổn định, *coin nào* đạt
+thì không. Nghĩa là ở mức edge này, việc một coin cụ thể qua được 3 cổng gần như
+tung đồng xu — mọi lời giải thích "vì sao ADA đạt mà SOL trượt" đều là kể chuyện
+về nhiễu.
+
+BTC ra +49.6% ở lần này so với +25.9% lần trước, cùng quy tắc, chỉ khác cách hiệu
+chỉnh. **Đừng đọc con số lợi nhuận nào trong dự án này chính xác hơn mức sai số
+gấp đôi.**
 
 **Khả năng dự đoán hướng có tính tổng quát** — nó sống sót khi bỏ đúng coin mà
 cấu hình được fit lên. Nhưng 53–54% **không đủ để giao dịch phần lớn coin**: coin

@@ -494,6 +494,36 @@ draw. Reported as it stands.
 Broken down by gate: 11/20 returned a profit after costs, 9/20 survived doubled
 fees, 14/20 were two-sided.
 
+### Re-run under the corrected rule
+
+The table above was produced with the broken threshold selection. Re-running the
+whole experiment with rank selection and matched out-of-fold calibration gives
+the **same headline and a different cast**:
+
+| | Threshold rule | Rank rule |
+|---|---|---|
+| Passed all three | 7/20 (35%) | **7/20 (35%)** |
+| Positive return | 11/20 | 13/20 |
+| Survives doubled fees | 9/20 | 8/20 |
+| Two-sided | 14/20 | 12/20 |
+| Passing symbols | ADA APT ATOM BTC DOGE DOT LINK | **ATOM BTC DOGE DOT ETC FIL OP** |
+
+Only four of seven symbols pass under both rules — a Jaccard overlap of 0.40.
+**Which symbols pass is not stable**, even though how many pass is. That is
+itself a result: at this effect size, whether an individual symbol clears three
+gates is close to a coin flip, and any story about *why* ADA passed and SOL
+failed would be a story about noise.
+
+Rank selection is far more robust than a threshold but it is not fully
+calibration-invariant either. Per-class isotonic maps are monotone individually,
+yet the margin |P(up) − P(down)| combines two of them, so a different calibration
+can reorder margins. BTCUSDT returns +49.6% here against +25.9% measured with
+mismatched calibration, on the same rule. The correlation between per-symbol sign
+accuracy across the two runs is only 0.355.
+
+**None of the return figures in this project should be read to better than about
+a factor of two.**
+
 ### The stronger finding underneath
 
 Pass rate answers "is this tradeable". It is the wrong instrument for asking "does
@@ -501,12 +531,18 @@ the model know anything", because a symbol can predict direction genuinely and
 still lose to its own transaction costs. Directional accuracy answers that
 question directly, and it is unambiguous:
 
-| | |
-|---|---|
-| Mean sign accuracy across 20 symbols | **53.70%** |
-| 95% confidence interval for the mean | **[51.81%, 55.58%]** — excludes 50% |
-| Symbols above 50% | **17 of 20**, binomial p = 0.0013 |
-| Excluding BTCUSDT, the symbol tuned on | **16 of 19**, p = 0.0022, mean 53.40% |
+Measured under the corrected rule, with the earlier run's figures beside them:
+
+| | Rank rule | Threshold rule |
+|---|---|---|
+| Mean sign accuracy across 20 symbols | **53.98%** | 53.70% |
+| 95% confidence interval for the mean | **[52.78%, 55.19%]** — excludes 50% | [51.81%, 55.58%] |
+| Symbols above 50% | **18 of 20**, p = 0.0002 | 17 of 20, p = 0.0013 |
+| Excluding BTCUSDT, the symbol tuned on | **17 of 19**, p = 0.0004, mean 53.75% | 16 of 19, p = 0.0022 |
+
+The two runs agree closely on the aggregate even though they disagree on which
+individual symbols pass. That is the signature of a real but small effect: the
+average is measurable, each individual draw is not.
 
 **The predictive signal generalises.** It survives removing the one symbol the
 configuration was fitted to, which is the check that matters most — BTC's own
