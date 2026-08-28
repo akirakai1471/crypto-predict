@@ -60,6 +60,33 @@ Bug bị bắt vì hệ thống live **không ra tín hiệu nào trong 2 ngày*
 kiểm tra coverage trước khi lưu model: lệch quá 3 lần so với lúc đánh giá thì
 từ chối lưu.
 
+### Quy tắc giao dịch hiện tại
+
+Toàn bộ đường sinh tín hiệu đã chuyển sang **thứ hạng**:
+
+> Giao dịch **8% số nến có margin hướng lớn nhất**, margin = |P(tăng) − P(giảm)|.
+
+Ba điểm khiến nó khác quy tắc cũ:
+
+1. **Bất biến với thang xác suất.** Hiệu chỉnh lại theo bất kỳ hàm đơn điệu nào
+   cũng không đổi nến nào được chọn.
+2. **Xếp theo margin, không theo max.** Nến 0.44 vs 0.45 nhìn "tự tin" nhưng là
+   tung đồng xu; quy tắc cũ xếp nó ngang với 0.45 vs 0.05.
+3. **Cutoff đi kèm model.** Live chỉ có một nến, không xếp hạng được, nên thứ
+   hạng được quy đổi thành một con số cụ thể — tính từ dự đoán out-of-sample của
+   fold cuối — và lưu trong metadata của model.
+
+Hiệu chỉnh **out-of-fold giờ là mặc định ở mọi nơi**, không riêng model cuối.
+Fold và model triển khai phải chung một thang xác suất, nếu không đánh giá đang
+đo một model khác với model được ship.
+
+Kết quả: model đã lưu bắn tín hiệu ở **12.87%** số nến gần nhất so với mục tiêu
+8% (tỉ lệ 1.6x, trong ngưỡng 3x cổng cho phép). Trước khi khớp thang đo, tỉ lệ
+này là **vô cực** — model bắn 0%.
+
+Hiệu chỉnh tốt hơn cũng đưa verdict phân loại từ NO-GO lên **GO**: model giờ
+thắng baseline tần suất nền trên Brier, nên registry không cần override nữa.
+
 ## Kết quả hiện tại, nói thẳng
 
 Model **có** tín hiệu dự đoán thật: độ chính xác tăng đều theo độ tin cậy nó tự
