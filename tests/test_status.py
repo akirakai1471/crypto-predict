@@ -112,8 +112,11 @@ def test_a_large_ambiguous_sample_says_so(cfg):
 
 
 def test_status_reports_when_nothing_is_running(cfg):
+    """Liveness is stated outright, not left for the reader to infer from an
+    empty table."""
     text = format_status(collect(cfg))
-    assert "Is the scheduler running?" in text
+    assert "Scheduler: NEVER STARTED" in text
+    assert "Nothing recorded yet" in text
 
 
 def test_status_always_shows_the_sample_size(cfg):
