@@ -163,6 +163,18 @@ uv run cryptopred-serve schedule
 Nhấp đúp `run.bat` — mở 2 cửa sổ (scheduler + dashboard) và bật trình duyệt.
 Đóng cửa sổ nào là dừng phần đó.
 
+**Cách biết chắc nó đang chạy:** nhấp đúp `status.bat`. Dòng đầu tiên là
+
+```
+Scheduler: RUNNING — last cycle 12 minutes ago
+```
+
+Nếu thấy `STOPPED` hoặc `NEVER STARTED` thì **không có gì đang được ghi** — chạy
+lại `run.bat`. Scheduler ghi nhịp tim sau mỗi chu kỳ; im quá 2 tiếng rưỡi là coi
+như đã chết. Đây là rủi ro lớn nhất của một thí nghiệm nhiều ngày: scheduler tắt
+sau một giờ, mọi thứ khác vẫn chạy bình thường, và triệu chứng duy nhất là log
+ngừng lớn — không ai nhận ra cho tới lúc quay lại.
+
 Xem kết quả bất cứ lúc nào: nhấp đúp `status.bat`, hoặc
 
 ```bash

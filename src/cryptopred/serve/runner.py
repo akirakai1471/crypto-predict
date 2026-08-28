@@ -15,6 +15,7 @@ from cryptopred.ingest.binance import BinanceClient
 from cryptopred.ingest.cli import run_klines_ingest
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.paper.trader import PaperTrader
+from cryptopred.serve import heartbeat
 from cryptopred.serve.gapfill import fill_gaps
 from cryptopred.serve.predictor import Predictor
 from cryptopred.serve.scoring import score_pending
@@ -122,4 +123,6 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
         counts["closed"] += trader.close_due_trades(symbol, interval, horizon=horizon)
 
     logger.info("cycle complete at %s: %s", pd.Timestamp.now(tz="UTC"), counts)
+    # Written last: a heartbeat should mean the cycle finished, not that it began.
+    heartbeat.write(cfg.data.root / "heartbeat.json", interval, counts)
     return counts

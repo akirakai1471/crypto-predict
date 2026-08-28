@@ -20,6 +20,7 @@ import pandas as pd
 from cryptopred.config import Config
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.paper.trader import PaperTrader
+from cryptopred.serve import heartbeat
 from cryptopred.serve.store import PredictionStore
 
 # Below this many scored signals, a hit rate is noise dressed as a result.
@@ -98,7 +99,11 @@ def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
             }
         )
 
-    return {"interval": interval, "symbols": per_symbol}
+    return {
+        "interval": interval,
+        "symbols": per_symbol,
+        "heartbeat": heartbeat.status(cfg.data.root / "heartbeat.json"),
+    }
 
 
 def format_status(status: dict[str, Any], backtest_reference: float = 0.589) -> str:
@@ -108,8 +113,22 @@ def format_status(status: dict[str, Any], backtest_reference: float = 0.589) -> 
         "=" * 78,
     ]
 
+    # Liveness first. Every number below is meaningless if nothing is still
+    # writing them, and a scheduler that died leaves no other visible trace.
+    beat = status.get("heartbeat") or {"state": "unknown", "detail": ""}
+    marker = {
+        "alive": "RUNNING",
+        "stale": "STOPPED",
+        "never_started": "NEVER STARTED",
+    }.get(beat["state"], "UNKNOWN")
+    lines += ["", f"Scheduler: {marker} — {beat['detail']}"]
+    if beat["state"] != "alive":
+        lines.append(
+            "  Nothing new is being recorded. Run run.bat and leave both windows open."
+        )
+
     if not status["symbols"]:
-        lines += ["", "Nothing recorded yet. Is the scheduler running?", "=" * 78]
+        lines += ["", "Nothing recorded yet.", "=" * 78]
         return "\n".join(lines)
 
     for s in status["symbols"]:
