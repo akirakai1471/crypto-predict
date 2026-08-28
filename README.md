@@ -161,6 +161,37 @@ vô nghĩa** — sửa rò rỉ trước, đừng train.
    chứng minh ngược lại.
 6. Mọi tỉ lệ hiển thị kèm cỡ mẫu.
 
+## Kiểm chứng trên 20 coin — cấu hình đóng băng
+
+```bash
+uv run cryptopred-model validate --symbols "BTCUSDT,ETHUSDT,SOLUSDT,..."
+```
+
+Tiêu chí được **commit trước khi chạy** (`docs/preregistration-multisymbol.md`),
+không chỉnh gì theo từng coin.
+
+**Kết quả theo tiêu chí đã cam kết: 7/20 đạt = 35% → INCONCLUSIVE.** Không phải
+40% để kết luận hiệu ứng thật, cũng không phải ≤10% để kết luận BTC chỉ là may.
+
+Nhưng bên dưới có phát hiện mạnh hơn:
+
+| | |
+|---|---|
+| Sign accuracy trung bình 20 coin | **53.70%** |
+| Khoảng tin cậy 95% | **[51.81%, 55.58%]** — không chứa 50% |
+| Coin trên 50% | **17/20** (p = 0.0013) |
+| **Bỏ BTC** (coin dùng tinh chỉnh) | **16/19** (p = 0.0022), TB 53.40% |
+
+**Khả năng dự đoán hướng có tính tổng quát** — nó sống sót khi bỏ đúng coin mà
+cấu hình được fit lên. Nhưng 53–54% **không đủ để giao dịch phần lớn coin**: coin
+đạt có accuracy TB 57.4%, coin trượt 51.7%.
+
+Cổng kiểm không loại một model dốt. Nó loại một edge quá mỏng so với phí.
+
+**Cảnh báo:** 20 coin crypto tương quan rất mạnh và cùng một giai đoạn 5 năm, nên
+đây **không phải 20 phép thử độc lập**. p-value ở trên lạc quan. Nếu cỡ mẫu hiệu
+dụng chỉ khoảng 8, p ≈ 0.04; khoảng 5 thì không còn ý nghĩa.
+
 ## Meta-labeling: model thứ hai học từ kết quả mô phỏng
 
 ```bash

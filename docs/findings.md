@@ -397,6 +397,70 @@ healthy feed. It also took the worst age across all intervals, including the 1m
 store that the scheduler deliberately does not sync. Both are fixed: age is
 measured from the close, and only the traded interval is judged.
 
+## Twenty symbols, one frozen configuration
+
+The criteria for this were committed before it ran
+(`docs/preregistration-multisymbol.md`). Nothing was tuned per symbol: same
+horizon, same threshold, same execution, same folds, twenty USDT perpetuals.
+
+**The headline, by the criteria written in advance: 7 of 20 pass, 35% — which
+falls in the band pre-registered as INCONCLUSIVE.** Not the 40% that would have
+supported a general effect, not the 10% that would have marked BTC as a lucky
+draw. Reported as it stands.
+
+| Passed all three gates | Failed |
+|---|---|
+| ADA, APT, ATOM, BTC, DOGE, DOT, LINK | ARB, AVAX, BCH, ETC, ETH, FIL, INJ, LTC, NEAR, OP, SOL, TRX, XRP |
+
+Broken down by gate: 11/20 returned a profit after costs, 9/20 survived doubled
+fees, 14/20 were two-sided.
+
+### The stronger finding underneath
+
+Pass rate answers "is this tradeable". It is the wrong instrument for asking "does
+the model know anything", because a symbol can predict direction genuinely and
+still lose to its own transaction costs. Directional accuracy answers that
+question directly, and it is unambiguous:
+
+| | |
+|---|---|
+| Mean sign accuracy across 20 symbols | **53.70%** |
+| 95% confidence interval for the mean | **[51.81%, 55.58%]** — excludes 50% |
+| Symbols above 50% | **17 of 20**, binomial p = 0.0013 |
+| Excluding BTCUSDT, the symbol tuned on | **16 of 19**, p = 0.0022, mean 53.40% |
+
+**The predictive signal generalises.** It survives removing the one symbol the
+configuration was fitted to, which is the check that matters most — BTC's own
+number here (59.3%, the highest in the set) is optimistically biased and cannot
+be used as evidence for itself.
+
+The two results together say something precise: the model really does predict
+direction across the asset class, at roughly 53–54%, and that is **not enough to
+trade most of them**. Symbols that passed averaged 57.4% sign accuracy; symbols
+that failed averaged 51.7%. The gates are not rejecting a model that knows
+nothing; they are rejecting an edge too thin to survive the toll, exactly as the
+break-even table predicts.
+
+### The caveat that keeps this from being conclusive
+
+**These are not twenty independent tests.** Crypto assets are strongly
+correlated and share one five-year period, so the effective sample is
+considerably smaller than twenty and every p-value above is optimistic. If the
+effective sample were closer to eight, the binomial result would sit near p =
+0.04 rather than 0.001; nearer five, it would not be significant at all.
+
+A market-wide regime could produce a correlated pass or a correlated failure,
+and this experiment cannot distinguish "the model reads crypto" from "the model
+reads this particular five years of crypto". Only forward time separates those,
+which is what the live log is accumulating.
+
+### What is notably absent
+
+No symbol was excluded, none was skipped for short history, and the pass rate is
+quoted over all twenty attempted. AVAXUSDT fired 8,448 signals at 49.7% accuracy
+and lost 70.5% — the largest single failure, and it is in the table rather than
+in a footnote.
+
 ## Decision
 
 Defaults stay at the 24-hour horizon and a 0.60 threshold. That is now the only
