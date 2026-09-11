@@ -23,6 +23,8 @@ import pandas as pd
 
 from cryptopred.backtest.engine import CostModel, backtest
 from cryptopred.backtest.execution import ExecutionModel
+from cryptopred.backtest.sizing import size_from_confidence
+from cryptopred.backtest.sizing_report import match_exposure
 from cryptopred.models.selection import signals_by_quantile_per_fold
 from cryptopred.models.train import TrainConfig, walk_forward_evaluate
 from cryptopred.paper.replay import SideStats, two_sided_verdict
@@ -194,6 +196,175 @@ def evaluate_symbol(
             "two_sided": verdict["decision"],
         },
     )
+
+
+def evaluate_symbol_sizing(
+    symbol: str,
+    dataset: pd.DataFrame,
+    bars: pd.DataFrame,
+    config: FrozenConfig,
+) -> SymbolResult:
+    """Fixed versus linear staking on one symbol, at equal average exposure.
+
+    Criteria in docs/preregistration-sizing.md, committed before this ran. Only
+    these two rules are compared: the Kelly variants decline more than half their
+    signals for want of funding, so their advantage mixes sizing with selection.
+    `linear` trades the same signals as `fixed`, which is what makes the stake
+    the only difference.
+    """
+    if len(bars) < MIN_BARS:
+        return SymbolResult(
+            symbol, status=f"skipped: only {len(bars):,} bars, need {MIN_BARS:,}"
+        )
+    if dataset.empty:
+        return SymbolResult(symbol, status="skipped: dataset empty after cleaning")
+
+    evaluation = walk_forward_evaluate(
+        dataset,
+        n_splits=config.n_splits,
+        horizon=config.horizon,
+        config=TrainConfig(
+            num_boost_round=config.rounds,
+            calibration_method="oof",
+            calibration_splits=config.calibration_splits,
+        ),
+    )
+    index = dataset.index[-evaluation["n_test_total"] :]
+    fold_ids = np.concatenate(
+        [np.full(f["n_test"], f["fold"]) for f in evaluation["folds"]]
+    )
+    proba = evaluation["proba"]
+    signals = signals_by_quantile_per_fold(proba, fold_ids, coverage=config.coverage)
+    confidence = proba.max(axis=1)
+
+    taken = signals != 0
+    if not taken.any():
+        return SymbolResult(symbol, status="skipped: no signals selected")
+
+    # The ramp starts at the weakest confidence that got through selection, so
+    # sizes run from zero at the marginal signal to full at the strongest.
+    floor = float(confidence[taken].min())
+    costs = config.costs()
+    forward = bars["close"].shift(-config.horizon) / bars["close"] - 1
+    median_move = float(forward.abs().median())
+
+    raw = {
+        method: np.where(
+            taken,
+            size_from_confidence(
+                confidence,
+                method=method,
+                threshold=floor,
+                median_move=median_move,
+                round_trip_cost=costs.round_trip_cost(),
+            ),
+            0.0,
+        )
+        for method in ("fixed", "linear")
+    }
+    matched = match_exposure(raw, signals)
+
+    window = bars.loc[index.min() : index.max()]
+    execution = config.execution()
+    arms: dict[str, Any] = {}
+    for method, sizes in matched.items():
+        frame = pd.DataFrame({"signal": signals, "size": sizes}, index=index)
+        run = backtest(
+            window, frame, horizon=config.horizon, costs=costs, execution=execution
+        )
+        arms[method] = {
+            "total_return": float(run.summary.get("total_return", 0.0)),
+            "max_drawdown": float(run.summary.get("max_drawdown", 0.0)),
+            "sharpe": float(run.summary.get("sharpe", 0.0)),
+            "exposure": float(np.abs(sizes).mean()),
+            "n_trades": int(run.summary.get("n_trades", 0)),
+        }
+
+    fixed, linear = arms["fixed"], arms["linear"]
+    # A return improvement bought with proportionally more risk is not one. The
+    # 20% relative allowance is in the pre-registration; it is not a number
+    # chosen after seeing which side it favours.
+    dd_ok = abs(linear["max_drawdown"]) <= abs(fixed["max_drawdown"]) * 1.2
+    return SymbolResult(
+        symbol,
+        status="tested",
+        detail={
+            "n_signals": int(taken.sum()),
+            "fixed": fixed,
+            "linear": linear,
+            "return_gap": linear["total_return"] - fixed["total_return"],
+            "drawdown_ok": bool(dd_ok),
+            "favours_linear": bool(
+                linear["total_return"] > fixed["total_return"] and dd_ok
+            ),
+        },
+    )
+
+
+def sizing_verdict(favoured: int, attempted: int) -> str:
+    """Apply the thresholds written down before the experiment."""
+    if attempted == 0:
+        return "nothing was attempted"
+    rate = favoured / attempted
+    if rate >= 0.65:
+        return (
+            f"ADOPT LINEAR — {rate:.0%} of symbols favour it, at or above the 65% "
+            "written down in advance. Crypto symbols move together, so these are "
+            "not independent tests; this is evidence about sizing under one "
+            "selection rule at one horizon, not about the edge itself"
+        )
+    if rate <= 0.35:
+        return (
+            f"KEEP FIXED — {rate:.0%} of symbols favour linear, at or below the 35% "
+            "written down in advance. The BTCUSDT result was noise"
+        )
+    return (
+        f"KEEP FIXED, INCONCLUSIVE — {rate:.0%} of symbols favour linear, between "
+        "the 35% and 65% written down in advance. Ties go to the incumbent: "
+        "switching on a coin flip buys nothing and adds a change to explain later"
+    )
+
+
+def format_sizing_validation(results: list[SymbolResult], config: FrozenConfig) -> str:
+    tested = [r for r in results if r.status == "tested"]
+    favoured = [r for r in tested if r.detail.get("favours_linear")]
+
+    lines = [
+        "=" * 100,
+        "MULTI-SYMBOL SIZING — fixed versus linear at equal average exposure",
+        "=" * 100,
+        f"horizon {config.horizon} bars   top {config.coverage:.0%} by rank   "
+        f"{config.n_splits} folds   {config.rounds} rounds",
+        "Criteria fixed in advance: docs/preregistration-sizing.md",
+        "",
+        f"{'symbol':>10} {'signals':>8} {'fix ret':>9} {'lin ret':>9} {'gap':>8} "
+        f"{'fix DD':>8} {'lin DD':>8} {'fix Shp':>8} {'lin Shp':>8} {'':>8}",
+        "-" * 100,
+    ]
+    for r in sorted(results, key=lambda x: (x.status != "tested", x.symbol)):
+        if r.status != "tested":
+            lines.append(f"{r.symbol:>10}   {r.status}")
+            continue
+        d, f, ln = r.detail, r.detail["fixed"], r.detail["linear"]
+        mark = "LINEAR" if d["favours_linear"] else ""
+        lines.append(
+            f"{r.symbol:>10} {d['n_signals']:>8,} {f['total_return']:>+8.1%} "
+            f"{ln['total_return']:>+8.1%} {d['return_gap']:>+7.1%} "
+            f"{f['max_drawdown']:>7.1%} {ln['max_drawdown']:>7.1%} "
+            f"{f['sharpe']:>8.2f} {ln['sharpe']:>8.2f} {mark:>8}"
+        )
+
+    lines += [
+        "",
+        "-" * 100,
+        f"attempted {len(results)}   tested {len(tested)}   "
+        f"favour linear {len(favoured)}/{len(results)}",
+        "",
+        "=" * 100,
+        f"VERDICT: {sizing_verdict(len(favoured), len(results))}",
+        "=" * 100,
+    ]
+    return "\n".join(lines)
 
 
 def summarise(results: list[SymbolResult]) -> dict[str, Any]:

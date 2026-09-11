@@ -426,6 +426,36 @@ a different experiment and it has not been run.
 > solid is the direction and the `linear` row, which trades the same 4,016
 > signals as fixed and still wins on return, drawdown and Sharpe at once.
 >
+> ### And then it did not survive twenty symbols
+>
+> Criteria were committed first (`docs/preregistration-sizing.md`) precisely
+> because the result above was found while fixing a bug. Running the same frozen
+> configuration across all 20 symbols, at matched exposure:
+>
+> **5 of 20 favour linear = 25%, at or below the 35% registered as "noise".
+> VERDICT: KEEP FIXED.** The live paper trader was not changed.
+>
+> BTCUSDT is the outlier that started this, and it is extreme: a +14.5pp return
+> gap against +6.0pp for the next best. Drop it and the mean gap across the
+> other 19 symbols is **−0.75pp** — linear is worse on average. Keeping it, the
+> mean across all 20 is +0.015pp, which is zero.
+>
+> **The drawdown result is the more useful finding, because it is nearly
+> unanimous.** Linear sizing produced a deeper maximum drawdown than fixed on
+> **19 of 20 symbols** (the exception is INJUSDT, −1.7% against −1.8%). Several
+> are not close: SOLUSDT −12.0% → −21.0%, BCHUSDT −8.2% → −22.4%, LTCUSDT
+> −5.1% → −9.8%. At matched average exposure, staking by confidence concentrates
+> the same capital into fewer, larger positions, so less of it is diversified
+> across trades at any moment. That mechanism does not depend on whether
+> confidence predicts anything, which is why it shows up on almost every symbol
+> while the return effect does not.
+>
+> So the corrected picture is narrower than either earlier claim. Confidence
+> **does** carry information the fixed threshold was hiding — the +0.17
+> correlation and the monotone buckets are real, and the meta-labelling section
+> below deserves the same suspicion. But acting on it through position size
+> makes returns no better on average and drawdowns reliably worse.
+>
 > **The general lesson is worth more than the result.** Two separate conclusions
 > in this document — meta-labelling and sizing — were "no signal here" findings
 > that turned out to be measurements of a broken selection rule. A null result

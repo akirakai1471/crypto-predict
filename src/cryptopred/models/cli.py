@@ -39,6 +39,8 @@ from cryptopred.models.validation import (
     FrozenConfig,
     SymbolResult,
     evaluate_symbol,
+    evaluate_symbol_sizing,
+    format_sizing_validation,
     format_validation,
 )
 
@@ -512,6 +514,11 @@ def validate(
         None, help="Comma-separated symbols. Defaults to the config's symbol list."
     ),
     interval: str = typer.Option("1h", help="Bar interval."),
+    sizing_arm: bool = typer.Option(
+        False,
+        "--sizing",
+        help="Compare fixed against linear staking instead of running the pass gates.",
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Run the frozen configuration across many symbols and report the spread.
@@ -520,6 +527,10 @@ def validate(
     than searching for a new one. The criteria were committed before the first
     run — see docs/preregistration-multisymbol.md — and every symbol attempted
     is reported, including the ones that fail.
+
+    `--sizing` answers a different pre-registered question with the same frozen
+    settings: at equal average exposure, does staking more on stronger signals
+    beat staking the same every time? See docs/preregistration-sizing.md.
     """
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     cfg = load_config(config)
@@ -546,9 +557,17 @@ def validate(
             symbol=symbol,
             feature_config=cfg.features,
         )
-        results.append(evaluate_symbol(symbol, dataset, bars, frozen))
+        results.append(
+            evaluate_symbol_sizing(symbol, dataset, bars, frozen)
+            if sizing_arm
+            else evaluate_symbol(symbol, dataset, bars, frozen)
+        )
 
-    report = format_validation(results, frozen)
+    report = (
+        format_sizing_validation(results, frozen)
+        if sizing_arm
+        else format_validation(results, frozen)
+    )
     typer.echo("\n" + report)
 
     reports_dir = cfg.data.root / "reports"
