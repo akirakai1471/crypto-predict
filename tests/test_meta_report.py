@@ -55,18 +55,15 @@ def test_benchmark_is_optional():
 def test_report_prints_the_benchmark_line_when_given_one():
     """Regression: the benchmark was computed but never reached the report, so a
     gate that looked active was doing nothing."""
+    from cryptopred.models.meta import MetaConfig
     from cryptopred.models.meta_report import format_meta_report
-
-    class _Cfg:
-        primary_threshold = 0.5
-        meta_threshold = 0.65
 
     text = format_meta_report(
         _scored(0.30),
         _scored(0.48),
         symbol="BTCUSDT",
         horizon=24,
-        config=_Cfg(),
+        config=MetaConfig(),
         folds=[],
         benchmark=_scored(0.62),
         benchmark_threshold=0.60,
@@ -76,14 +73,28 @@ def test_report_prints_the_benchmark_line_when_given_one():
 
 
 def test_report_omits_the_benchmark_line_when_absent():
+    from cryptopred.models.meta import MetaConfig
     from cryptopred.models.meta_report import format_meta_report
-
-    class _Cfg:
-        primary_threshold = 0.5
-        meta_threshold = 0.65
 
     text = format_meta_report(
         _scored(0.30), _scored(0.48), symbol="BTCUSDT", horizon=24,
-        config=_Cfg(), folds=[],
+        config=MetaConfig(), folds=[],
     )
     assert "BENCHMARK" not in text
+
+
+def test_report_renders_with_a_real_config():
+    """A 20-minute nested-CV run once died at the print because the report read
+    a config field that had been renamed. The report must be exercised against
+    the actual MetaConfig, not a stub that happens to carry both names."""
+    from cryptopred.models.meta import MetaConfig
+    from cryptopred.models.meta_report import format_meta_report
+
+    scored = _scored(0.3)
+    text = format_meta_report(
+        scored, scored, symbol="BTCUSDT", horizon=24,
+        config=MetaConfig(), folds=[{"fold": 0, "meta_trained": False, "n_primary": 10}],
+        benchmark=scored, benchmark_threshold=0.08,
+    )
+    assert "Primary coverage" in text
+    assert "top 8% by rank" in text

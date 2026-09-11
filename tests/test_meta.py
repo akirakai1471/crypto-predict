@@ -83,7 +83,7 @@ def test_oof_proba_only_covers_inner_test_blocks():
     dataset = _dataset(bars)
     cfg = MetaConfig(primary=TrainConfig(num_boost_round=20), inner_splits=3)
 
-    proba, mask = oof_primary_proba(dataset, horizon=4, config=cfg)
+    proba, mask, fold_ids = oof_primary_proba(dataset, horizon=4, config=cfg)
     assert mask.sum() > 0
     assert not mask.all()            # early rows get no out-of-fold prediction
     assert not mask[:100].any()      # the first inner training block is never predicted
@@ -95,7 +95,7 @@ def test_meta_training_set_labels_are_trade_outcomes():
     bars = _bars(3000)
     dataset = _dataset(bars)
     cfg = MetaConfig(
-        primary=TrainConfig(num_boost_round=20), inner_splits=3, primary_threshold=0.4
+        primary=TrainConfig(num_boost_round=20), inner_splits=3, primary_coverage=0.35
     )
 
     x, y, w = build_meta_training_set(dataset, bars, horizon=4, config=cfg)
@@ -148,7 +148,7 @@ def test_walk_forward_meta_filters_signals_down():
         primary=TrainConfig(num_boost_round=30),
         secondary=TrainConfig(num_boost_round=40, min_data_in_leaf=20),
         inner_splits=3,
-        primary_threshold=0.4,
+        primary_coverage=0.35,
         meta_threshold=0.55,
     )
     result = walk_forward_meta(dataset, bars, horizon=4, n_splits=3, config=cfg)
@@ -181,7 +181,7 @@ def test_a_stricter_meta_threshold_takes_fewer_trades():
         primary=TrainConfig(num_boost_round=20),
         secondary=TrainConfig(num_boost_round=30, min_data_in_leaf=20),
         inner_splits=3,
-        primary_threshold=0.4,
+        primary_coverage=0.35,
     )
     loose = walk_forward_meta(
         dataset, bars, horizon=4, n_splits=3, config=MetaConfig(meta_threshold=0.3, **base)
@@ -215,7 +215,7 @@ def test_per_side_training_produces_a_model_for_each_direction():
         primary=TrainConfig(num_boost_round=20),
         secondary=TrainConfig(num_boost_round=20, min_data_in_leaf=20),
         inner_splits=3,
-        primary_threshold=0.4,
+        primary_coverage=0.35,
         per_side=True,
         min_side_rows=50,
     )

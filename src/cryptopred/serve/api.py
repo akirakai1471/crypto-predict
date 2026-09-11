@@ -18,6 +18,7 @@ from cryptopred.config import Config, load_config
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.paper.trader import PaperTrader
+from cryptopred.serve.drift import coverage_drift
 from cryptopred.serve.predictor import Predictor
 from cryptopred.serve.store import PredictionStore
 
@@ -137,9 +138,20 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             model_meta = {}
 
         model_metrics = model_meta.get("metrics", {}) or {}
+
+        # Whether the model is trading at all, which zero signals cannot
+        # distinguish from a quiet market. A rule that has stopped firing makes
+        # every other number on this page a report about nothing.
+        drift = coverage_drift(
+            predictions.history(symbol, interval, limit=100_000),
+            model_version=model_meta.get("version"),
+            cutoff=model_meta.get("margin_cutoff"),
+            target=model_meta.get("signal_coverage"),
+        )
         return {
             "live": live,
             "paper": paper,
+            "drift": drift,
             "model": {
                 "version": model_meta.get("version"),
                 "trained_at": model_meta.get("created_at"),

@@ -32,6 +32,7 @@ import pandas as pd
 
 from cryptopred.backtest.engine import CostModel, backtest
 from cryptopred.dataset.builder import feature_columns
+from cryptopred.models.selection import signals_by_quantile, signals_by_quantile_per_fold
 from cryptopred.models.splits import PurgedWalkForward
 from cryptopred.models.train import TrainConfig, train_fold
 
@@ -43,7 +44,11 @@ class MetaConfig:
     """Knobs for the two-model stack."""
 
     # Loose on purpose: the primary casts a wide net and the secondary filters.
-    primary_threshold: float = 0.40
+    # Expressed as a fraction of bars rather than a probability. A threshold is
+    # not comparable across folds — the same 0.40 selected wildly different
+    # fractions depending on how each fold's calibrator happened to fit, which is
+    # the defect that invalidated this experiment's first run.
+    primary_coverage: float = 0.20
     meta_threshold: float = 0.55
     inner_splits: int = 3
     primary: TrainConfig = field(default_factory=lambda: TrainConfig(num_boost_round=300))
@@ -96,29 +101,36 @@ def simulate_signal_returns(
 
 def oof_primary_proba(
     dataset: pd.DataFrame, horizon: int, config: MetaConfig
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Out-of-fold primary probabilities inside a training window.
 
-    Returns (proba, mask) where mask marks the rows that received a genuine
-    out-of-fold prediction. Early rows never appear in an inner test block —
-    walk-forward has no way to predict them without looking forward — so they
-    are excluded rather than filled in.
+    Returns (proba, mask, fold_ids). `mask` marks the rows that received a
+    genuine out-of-fold prediction. Early rows never appear in an inner test
+    block — walk-forward has no way to predict them without looking forward — so
+    they are excluded rather than filled in.
+
+    `fold_ids` is returned because selection has to happen within a fold. Each
+    inner fold fits its own calibrator, so probabilities from different folds sit
+    on different scales; ranking them together would let whichever fold
+    calibrated most aggressively supply most of the secondary's training rows.
     """
     n = len(dataset)
     proba = np.full((n, 3), np.nan)
     mask = np.zeros(n, dtype=bool)
+    fold_ids = np.full(n, -1, dtype=int)
 
     cv = PurgedWalkForward(
         n_splits=config.inner_splits, horizon=horizon, embargo_frac=0.01
     )
-    for train_idx, test_idx in cv.split(dataset.index):
+    for fold_id, (train_idx, test_idx) in enumerate(cv.split(dataset.index)):
         result = train_fold(
             dataset.iloc[train_idx], dataset.iloc[test_idx], config.primary
         )
         proba[test_idx] = result.proba
         mask[test_idx] = True
+        fold_ids[test_idx] = fold_id
 
-    return proba, mask
+    return proba, mask, fold_ids
 
 
 def build_meta_training_set(
@@ -133,9 +145,11 @@ def build_meta_training_set(
     A row exists for every bar where the primary fired an honest out-of-fold
     signal. The label is whether that trade would have made money after costs.
     """
-    proba, mask = oof_primary_proba(dataset, horizon, config)
+    proba, mask, fold_ids = oof_primary_proba(dataset, horizon, config)
     signals = np.zeros(len(dataset), dtype=int)
-    signals[mask] = signals_from_proba(proba[mask], config.primary_threshold)
+    signals[mask] = signals_by_quantile_per_fold(
+        proba[mask], fold_ids[mask], config.primary_coverage
+    )
 
     fired = signals != 0
     if not fired.any():
@@ -215,7 +229,7 @@ def apply_meta(
     Returns (final_signals, meta_probability). Rows the primary skipped get a
     meta probability of NaN — the secondary was never asked about them.
     """
-    primary_signals = signals_from_proba(primary_proba, config.primary_threshold)
+    primary_signals = signals_by_quantile(primary_proba, config.primary_coverage)
     meta_prob = np.full(len(dataset), np.nan)
     final = np.zeros(len(dataset), dtype=int)
 
@@ -283,7 +297,7 @@ def walk_forward_meta(
             # Nothing to learn from: fall back to the primary alone rather than
             # inventing a filter.
             result = train_fold(train, test, config.primary)
-            primary = signals_from_proba(result.proba, config.primary_threshold)
+            primary = signals_by_quantile(result.proba, config.primary_coverage)
             final_signals.append(primary)
             primary_signals.append(primary)
             primary_probas.append(result.proba)
@@ -296,7 +310,7 @@ def walk_forward_meta(
 
         boosters = train_secondary_per_side(meta_x, meta_y, meta_w, config)
         result = train_fold(train, test, config.primary)
-        primary = signals_from_proba(result.proba, config.primary_threshold)
+        primary = signals_by_quantile(result.proba, config.primary_coverage)
         final, _ = apply_meta(
             boosters, test, result.proba, list(meta_x.columns), config
         )
@@ -325,6 +339,11 @@ def walk_forward_meta(
         # Kept so the stack can be judged against the best simple configuration,
         # not only against the loose primary it happens to filter.
         "primary_proba": np.concatenate(primary_probas),
+        # Needed to rank within folds afterwards. Pooling folds to pick a
+        # benchmark would reintroduce the scale problem the rank rule removes.
+        "fold_ids": np.concatenate(
+            [np.full(len(s), f["fold"]) for s, f in zip(primary_signals, folds, strict=True)]
+        ),
         "folds": folds,
         "config": config,
     }

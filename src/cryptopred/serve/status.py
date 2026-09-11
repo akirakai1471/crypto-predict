@@ -19,8 +19,10 @@ import pandas as pd
 
 from cryptopred.config import Config
 from cryptopred.ingest.storage import ParquetStore
+from cryptopred.models.registry import ModelRegistry
 from cryptopred.paper.trader import PaperTrader
 from cryptopred.serve import heartbeat
+from cryptopred.serve.drift import coverage_drift, format_drift
 from cryptopred.serve.store import PredictionStore
 
 # Below this many scored signals, a hit rate is noise dressed as a result.
@@ -49,11 +51,24 @@ def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
         cfg=cfg, store=store, parquet=parquet, execution=cfg.strategy.execution_model()
     )
 
+    registry = ModelRegistry(cfg.data.root / "models")
+
     per_symbol = []
     for symbol in cfg.data.symbols:
         history = store.history(symbol, interval, limit=100_000)
         if history.empty:
             continue
+
+        # A model that has stopped firing is invisible in every number below:
+        # zero signals reads the same as a quiet market. Ask directly.
+        version = registry.latest(symbol, interval)
+        meta = registry.load(version).metadata if version else {}
+        drift = coverage_drift(
+            history,
+            model_version=version,
+            cutoff=meta.get("margin_cutoff"),
+            target=meta.get("signal_coverage"),
+        )
 
         backfilled_flag = (
             history["was_backfilled"].fillna(0).astype(int)
@@ -110,6 +125,8 @@ def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
                 "n_closed": int(len(closed)),
                 "n_rested": rested,
                 "paper": trader.summary(symbol),
+                "model_version": version,
+                "drift": drift,
             }
         )
 
@@ -141,6 +158,21 @@ def format_status(status: dict[str, Any], backtest_reference: float = 0.589) -> 
             "  Nothing new is being recorded. Run run.bat and leave both windows open."
         )
 
+    broken = [
+        s for s in status["symbols"] if s.get("drift", {}).get("state") in ("silent", "drifted")
+    ]
+    if broken:
+        lines += ["", "-" * 78]
+        for s in broken:
+            lines.append(f"  {s['symbol']}: {s['drift']['detail']}")
+        lines.append(
+            "  The saved rule does not match how the model behaves on this market."
+        )
+        lines.append(
+            "  Retrain: python -m cryptopred.models.cli train --symbol "
+            f"{broken[0]['symbol']} --interval {status['interval']} --save"
+        )
+
     if not status["symbols"]:
         lines += ["", "Nothing recorded yet.", "=" * 78]
         return "\n".join(lines)
@@ -150,6 +182,8 @@ def format_status(status: dict[str, Any], backtest_reference: float = 0.589) -> 
         lines += [
             "",
             f"{s['symbol']} — {s['n_predictions']:,} predictions over {span}",
+            f"  model:              {s.get('model_version') or 'none saved'}",
+            f"  {format_drift(s['drift'])}",
             f"  scored so far:      {s['n_scored']:,} of {s['n_live']:,} live rows "
             "(the rest are waiting for their horizon)",
             f"  signals taken:      {s['n_signals']:,}"

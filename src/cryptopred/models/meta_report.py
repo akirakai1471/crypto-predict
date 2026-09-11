@@ -110,9 +110,9 @@ def format_meta_report(
         "=" * 74,
         f"META-LABELLED STACK — {symbol}, horizon {horizon} bars",
         "=" * 74,
-        f"Primary threshold: {config.primary_threshold:.2f}  "
+        f"Primary coverage: {config.primary_coverage:.0%} of bars  "
         f"(loose on purpose — the secondary filters)",
-        f"Meta threshold:    {config.meta_threshold:.2f}",
+        f"Meta threshold:   {config.meta_threshold:.2f}",
         "",
         f"{'':<24}{'PRIMARY ALONE':>18}{'WITH META FILTER':>20}",
         "-" * 74,
@@ -164,8 +164,8 @@ def format_meta_report(
     if benchmark is not None:
         lines += [
             "",
-            "BENCHMARK — one model alone at the production threshold "
-            f"{benchmark_threshold:.2f}",
+            "BENCHMARK — one model alone under the production rule, top "
+            f"{benchmark_threshold:.0%} by rank",
             f"  signals {benchmark['n_signals']:,}   "
             f"return {benchmark['total_return']:+.1%}   "
             f"drawdown {benchmark['max_drawdown']:.1%}   "

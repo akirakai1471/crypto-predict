@@ -11,8 +11,9 @@ import typer
 from cryptopred.config import load_config
 from cryptopred.dataset.builder import dataset_path
 from cryptopred.ingest.storage import ParquetStore
-from cryptopred.models.meta import MetaConfig, signals_from_proba, walk_forward_meta
+from cryptopred.models.meta import MetaConfig, walk_forward_meta
 from cryptopred.models.meta_report import format_meta_report, score_signals
+from cryptopred.models.selection import signals_by_quantile_per_fold
 from cryptopred.models.train import TrainConfig
 
 app = typer.Typer(help="Train and evaluate the meta-labelled two-model stack.")
@@ -30,8 +31,13 @@ def run(
     symbol: str = typer.Option("BTCUSDT", help="Symbol to evaluate."),
     interval: str = typer.Option("1h", help="Bar interval."),
     horizon: int = typer.Option(None, help="Label horizon in bars, overriding the config."),
-    primary_threshold: float = typer.Option(
-        0.40, help="Primary signal threshold. Loose values give the secondary more to filter."
+    primary_coverage: float = typer.Option(
+        0.20,
+        help=(
+            "Fraction of bars the primary fires on. Loose values give the secondary "
+            "more to filter. Replaces the old probability threshold, which selected "
+            "a different fraction in every fold."
+        ),
     ),
     meta_threshold: float = typer.Option(
         0.55, help="Minimum probability of profit required to take a signal."
@@ -58,10 +64,10 @@ def run(
     bars = ParquetStore(cfg.data.root / "raw").read("klines", symbol, interval)
 
     meta_config = MetaConfig(
-        primary_threshold=primary_threshold,
+        primary_coverage=primary_coverage,
         meta_threshold=meta_threshold,
         inner_splits=inner_splits,
-        primary=TrainConfig(num_boost_round=rounds, signal_threshold=primary_threshold),
+        primary=TrainConfig(num_boost_round=rounds),
         secondary=TrainConfig(num_boost_round=meta_rounds, min_data_in_leaf=100),
     )
 
@@ -84,9 +90,11 @@ def run(
     )
 
     # The honest benchmark is not the loose primary the stack filters — that is
-    # easy to beat — but one model alone at the threshold already in production.
-    benchmark_threshold = cfg.strategy.signal_threshold
-    benchmark_signals = signals_from_proba(result["primary_proba"], benchmark_threshold)
+    # easy to beat — but one model alone under the rule already in production.
+    benchmark_threshold = cfg.strategy.signal_coverage
+    benchmark_signals = signals_by_quantile_per_fold(
+        result["primary_proba"], result["fold_ids"], benchmark_threshold
+    )
     benchmark_scored = score_signals(
         bars, index, benchmark_signals, horizon=horizon, forward_return=forward
     )

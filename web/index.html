@@ -448,6 +448,7 @@ async function load() {
   const pendingRows = [];
   const execNotes = [];
   const overrideNotes = [];
+  const driftNotes = [];
   let caveatText = "";
 
   for (const symbol of cfg.symbols) {
@@ -470,6 +471,12 @@ async function load() {
       caveatText = m.caveat;
       if (m.model && m.model.override_reason) {
         overrideNotes.push(`${symbol}: model đã bị ghi đè cổng kiểm — cổng nói "${m.model.gate_decision}" (${m.model.gate_reason}). Lý do ghi đè: ${m.model.override_reason}`);
+      }
+
+      // Model ngừng bắn tín hiệu trông giống hệt thị trường yên ắng: cả hai đều
+      // là 0 tín hiệu. Đã mất 16 ngày mới phát hiện một lần, nên nó phải tự nói.
+      if (m.drift && (m.drift.state === "silent" || m.drift.state === "drifted")) {
+        driftNotes.push(`${symbol}: ${m.drift.detail}`);
       }
 
       const live = m.live;
@@ -572,8 +579,11 @@ async function load() {
   const overrideHtml = overrideNotes.length
     ? `<br><br><strong>Cảnh báo cổng kiểm:</strong> ${overrideNotes.join(" · ")}`
     : "";
+  const driftHtml = driftNotes.length
+    ? `<br><br><strong>Model không bắn đúng nhịp:</strong> ${driftNotes.join(" · ")}. Quy tắc đã lưu không khớp cách model chạy trên thị trường hiện tại — train lại trước khi đọc bất kỳ con số nào bên trên.`
+    : "";
   document.getElementById("caveat").innerHTML =
-    `<strong>Đọc trước khi tin số:</strong> ${caveatText || "Xem docs/findings.md."}${overrideHtml}`;
+    `<strong>Đọc trước khi tin số:</strong> ${caveatText || "Xem docs/findings.md."}${overrideHtml}${driftHtml}`;
 
   document.getElementById("footer").textContent =
     `Horizon ${cfg.horizon_bars["1h"]} nến · giao dịch ${fmtPct(cfg.signal_coverage, 0)} số nến có độ chênh lớn nhất · ${cfg.execution_style === "maker" ? `lệnh limit, phí maker ${(cfg.maker_fee * 100).toFixed(3)}%` : `lệnh market, phí taker ${(cfg.taker_fee * 100).toFixed(3)}%`}/chiều · không có kết nối giao dịch thật`;
