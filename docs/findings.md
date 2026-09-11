@@ -680,6 +680,47 @@ measured from the close, and only the traded interval is judged.
 
 ## Twenty symbols, one frozen configuration
 
+> **Re-run 2026-09-11 with fourteen more days of data. Verdict unchanged, and
+> the re-run is more informative than the verdict.**
+>
+> All twenty symbols were refreshed to 2026-09-11 — 339 new hourly bars each,
+> which is **0.6% more data** — and the frozen configuration re-run unchanged.
+>
+> **6 of 20 pass, 30%. Still INCONCLUSIVE** (previously 7 of 20, 35%).
+>
+> What 0.6% more data did to the individual results:
+>
+> | symbol | before | after | change |
+> |---|---|---|---|
+> | ADAUSDT | +2.9% | **+102.7%** | +99.8pp |
+> | FILUSDT | +29.9% | −21.7% | −51.6pp |
+> | TRXUSDT | +2.2% | −37.2% | −39.4pp |
+> | DOTUSDT | +45.3% | +7.1% | −38.2pp |
+> | ETCUSDT | +17.0% | +52.1% | +35.1pp |
+>
+> Adding bars moves every walk-forward fold boundary, so all five models refit on
+> shifted windows and every test block changes. The mechanism is ordinary; the
+> magnitude is the finding. **A per-symbol return figure in this document can
+> move by 100 percentage points on 0.6% more data.** Nothing here should be read
+> to better than a factor of two, and this is the direct evidence for that,
+> replacing the earlier inference from disagreeing selection rules.
+>
+> The pass list moved with it. Kept: ATOM, BTC, DOGE, ETC, OP. Lost: DOT, FIL.
+> Gained: ADA. Jaccard 0.62 — better than the 0.40 recorded between two different
+> selection rules, but this is the *same* rule on *almost the same* data, so 0.62
+> is the more damning of the two numbers. Which symbols pass is close to a
+> coin flip.
+>
+> **The directional result went the other way and got stronger.** Mean sign
+> accuracy across all twenty rose from 53.98% to **54.42%**, and symbols above
+> 50% from 18/20 to **19/20** (only INJUSDT at 49.6% is below). Binomial p on
+> 19/20 is 4e-05, against 4e-04 before — though crypto symbols move together, so
+> both p-values overstate the evidence and neither is twenty independent tests.
+>
+> That split is the whole project in one table. The thing that survives more data
+> is the claim that the model knows something about direction. The thing that
+> does not survive is any particular statement about money.
+
 The criteria for this were committed before it ran
 (`docs/preregistration-multisymbol.md`). Nothing was tuned per symbol: same
 horizon, same threshold, same execution, same folds, twenty USDT perpetuals.

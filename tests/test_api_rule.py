@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
@@ -47,8 +49,9 @@ def test_predict_reports_the_cutoff_as_none_without_a_model(client):
 def test_the_caveat_describes_the_corrected_result(client):
     body = client.get("/api/metrics?symbol=BTCUSDT&interval=1h").json()
     caveat = body["caveat"]
-    assert "7/20" in caveat
-    assert "53.98%" in caveat
+    assert re.search(r"\d+/20", caveat)            # a pass rate, out of every
+    assert "KHÔNG KẾT LUẬN ĐƯỢC" in caveat          # symbol attempted
+    assert re.search(r"5[3-9]\.\d+%", caveat)      # the sign-accuracy result
     assert "gấp đôi" in caveat          # the factor-of-two warning travels with it
 
 

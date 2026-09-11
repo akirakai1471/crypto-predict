@@ -1,0 +1,37 @@
+========================================================================================================
+MULTI-SYMBOL VALIDATION — one frozen configuration, no per-symbol tuning
+========================================================================================================
+horizon 24 bars   top 8% by rank   maker 0.20% chase, strict fill   5 folds   400 rounds
+Criteria fixed in advance: docs/preregistration-multisymbol.md
+
+    symbol     bars  signals   sign%    return    maxDD    2x fee  shorts  short%     verdict      
+--------------------------------------------------------------------------------------------------------
+   ADAUSDT   57,962    3,815   58.2%  +102.7%  -32.5%   +81.2%   2,609   58.0%   TWO-SIDED  PASS
+   APTUSDT   34,160    2,225   55.5%    +7.2%  -27.3%    +0.6%   1,122   53.8%   ONE-SIDED      
+   ARBUSDT   30,427    1,976   54.7%   -20.2%  -39.5%   -24.5%   1,537   55.0%   ONE-SIDED      
+  ATOMUSDT   57,790    3,801   53.5%   +39.5%  -42.6%   +23.8%   1,197   54.6%   TWO-SIDED  PASS
+  AVAXUSDT   52,299    3,435   52.5%   -12.8%  -47.0%   -21.1%   2,748   52.6%   TWO-SIDED      
+   BCHUSDT   58,994    3,881   53.9%   -58.0%  -68.8%   -62.7%   1,920   55.2%   ONE-SIDED      
+   BTCUSDT   61,433    4,045   59.6%   +42.3%  -21.7%   +22.1%     695   53.5%   TWO-SIDED  PASS
+  DOGEUSDT   54,097    3,555   56.0%   +29.5%  -23.3%   +17.0%   2,370   56.8%   TWO-SIDED  PASS
+   DOTUSDT   53,067    3,486   55.1%    +7.1%  -26.7%    -3.3%   2,769   55.8%   TWO-SIDED      
+   ETCUSDT   58,322    3,836   55.2%   +52.1%  -22.8%   +36.0%   2,246   54.0%   TWO-SIDED  PASS
+   ETHUSDT   59,523    3,916   53.0%   -17.4%  -37.6%   -27.2%     154   31.2%   ONE-SIDED      
+   FILUSDT   51,748    3,400   55.8%   -21.7%  -55.0%   -28.8%   2,562   53.9%   ONE-SIDED      
+   INJUSDT   35,672    2,326   49.6%   +28.4%  -23.9%   +21.0%     779   47.9%   ONE-SIDED      
+  LINKUSDT   58,298    3,835   53.5%   +11.5%  -30.8%    -0.3%   1,684   55.6%   TWO-SIDED      
+   LTCUSDT   58,490    3,850   53.5%    -5.4%  -34.4%   -16.2%     350   71.4%   TWO-SIDED      
+  NEARUSDT   51,770    3,400   51.2%   -43.4%  -53.3%   -48.4%   2,861   51.0%   ONE-SIDED      
+    OPUSDT   37,508    2,450   55.7%   +36.0%  -20.3%   +27.4%   1,822   56.8%   TWO-SIDED  PASS
+   SOLUSDT   52,515    3,450   52.6%    -2.4%  -47.2%   -11.5%   1,356   51.2%   ONE-SIDED      
+   TRXUSDT   58,346    3,840   54.2%   -37.2%  -43.7%   -46.3%      17   52.9%    UNPROVEN      
+   XRPUSDT   58,562    3,855   55.1%   -28.8%  -37.7%   -37.0%   3,131   52.9%   ONE-SIDED      
+
+--------------------------------------------------------------------------------------------------------
+attempted 20   tested 20   skipped 0
+positive return: 10/20   survives 2x fees: 8/20   two-sided: 10/20
+PASSED ALL THREE: 6/20 (30% of attempted)
+
+========================================================================================================
+VERDICT: INCONCLUSIVE — 30% of symbols pass, between the 10% and 40% written down in advance. Either a real effect concentrated in a subset, or a weak one near the noise floor. Reported as inconclusive rather than argued into either camp
+========================================================================================================

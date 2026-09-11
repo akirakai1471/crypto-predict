@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
@@ -66,7 +68,10 @@ def test_history_returns_rows(client):
 
 def test_metrics_always_carries_the_caveat(client):
     body = client.get("/api/metrics?symbol=BTCUSDT&interval=1h").json()
-    assert "7/20" in body["caveat"]
+    # Pin the shape, not the figure. Re-running the validation legitimately
+    # changes the pass count, and a test that breaks on an honest re-run
+    # pressures the next person to leave the stale number in place.
+    assert re.search(r"\d+/20", body["caveat"])
     assert "findings.md" in body["caveat"]
     assert body["live"]["n_scored"] == 0
     assert body["live"]["accuracy"] is None

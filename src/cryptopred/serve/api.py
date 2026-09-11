@@ -166,13 +166,13 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             # Repeated in the payload so no consumer can render the live numbers
             # without the caveat attached to them.
             "caveat": (
-                "Chạy cấu hình cố định trên 20 coin: 7/20 đạt (35%) — mức đã ghi trước "
-                "là KHÔNG KẾT LUẬN ĐƯỢC. Chạy lại bằng quy tắc đã sửa vẫn 7/20 nhưng "
-                "danh sách coin đạt chỉ trùng 4/7, nên việc một coin cụ thể đạt là gần "
-                "như tung đồng xu. Thứ vững nhất là độ chính xác hướng: trung bình "
-                "53.98%, 18/20 coin trên 50%. Mọi con số lợi nhuận từng báo cáo đều đã "
-                "bị thổi phồng bởi một lỗi hiệu chỉnh và đã được sửa — đừng đọc chúng "
-                "chính xác hơn mức sai số gấp đôi. Chi tiết: docs/findings.md."
+                "Chạy cấu hình cố định trên 20 coin: 6/20 đạt (30%) — mức đã ghi trước "
+                "là KHÔNG KẾT LUẬN ĐƯỢC. Thêm 0.6% dữ liệu (14 ngày) làm ADA nhảy "
+                "+99.8pp và FIL rơi -51.6pp, danh sách coin đạt đổi 3/8 — nên con số "
+                "lợi nhuận của từng coin gần như không có ý nghĩa. Thứ vững nhất là độ "
+                "chính xác hướng: trung bình 54.42%, 19/20 coin trên 50%, và nó mạnh "
+                "lên khi có thêm dữ liệu. Đừng đọc bất kỳ con số lợi nhuận nào chính "
+                "xác hơn mức sai số gấp đôi. Chi tiết: docs/findings.md."
             ),
         }
 
