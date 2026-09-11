@@ -83,6 +83,59 @@ days, which forced a comparison between the served model and the evaluated ones.
 A coverage check now runs before any model is saved, and refuses to store a model
 whose signal rate differs from its evaluation by more than 3x.
 
+## SECOND CORRECTION — the coverage check was measured in-sample
+
+Date: 2026-09-11. The check added above did not work, and it failed silently in
+the way that matters: it passed a model that then traded nothing.
+
+The saved model reported "fires on 12.87% of bars against an 8% target, ratio
+1.6x" and was stored. It then produced **0 signals on 336 logged live bars**.
+
+Two mistakes stacked:
+
+1. **The cutoff came from the fold models, the model came from a different fit.**
+   The final model trains on all the data, calibrates better, and so produces
+   *narrower* directional margins than any fold model. A cutoff set on fold
+   output is a bar the deployed model cannot clear.
+2. **The check ran on the final model's own training rows.** Margins on data a
+   model was fitted to are wide, because it has memorised those rows. The check
+   therefore confirmed a rule against the one sample guaranteed to satisfy it.
+
+### The fix
+
+The final fit now holds back the last 3,000 bars. The older two-thirds set the
+cutoff; the newest third verifies it. Neither block was in the training data, and
+the verification block did not set the rule, so the check can fail — which is the
+only property that makes a check worth having.
+
+`COVERAGE_TOLERANCE` also dropped from 3.0 to 2.0. A regression test showed an
+in-sample cutoff producing 3.2% coverage against an 8% target — a 2.5x shortfall
+that the old tolerance waved through. Sampling noise on a 1,000-bar check is
+about ±1.3x at two sigma, so 2.0 is comfortably outside noise.
+
+### What changed in the numbers
+
+The retrained model's honest cutoff is **0.0610**, not the 0.0795 taken from the
+fold models. Verified coverage on unseen bars: **8.90% against an 8% target
+(1.1x)**.
+
+The training report was also scoring the wrong strategy. It backtested the
+withdrawn 0.60 threshold while deploying the rank rule, so the verdict on screen
+described trades nobody placed:
+
+| rule | trades | win rate | net return | max DD | verdict |
+|---|---|---|---|---|---|
+| threshold 0.60 (withdrawn, still printed) | 7,215 | 52.50% | +70.4% | −42.3% | NO-GO |
+| rank, top 8% (deployed) | 4,020 | 53.43% | +54.5% | −23.3% | GO |
+
+The rank rule earns less and risks much less. The `sweep` command now sweeps
+coverage rather than the threshold, because a threshold number no longer refers
+to anything stable.
+
+This does not change the project's conclusion. The edge remains unproven; see
+"Twenty symbols, one frozen configuration". It changes which model is deployed
+and makes the live experiment able to record anything at all.
+
 ## Headline
 
 The model has **real predictive signal**. Whether that signal is a **tradeable
@@ -334,6 +387,50 @@ a different experiment and it has not been run.
 
 ## Position sizing by probability: also no benefit, and now we know why
 
+> **REVERSED by the 2026-09-11 re-run.** This section concluded that confidence
+> carries no usable information above the cutoff and that flat betting wins.
+> Re-run under the rank rule, the ordering flips and the diagnosis with it.
+>
+> **BTCUSDT, 24h horizon, top 8% by margin, exposure held equal at 0.3%:**
+>
+> | Rule | Return | Max DD | Sharpe | trades |
+> |---|---|---|---|---|
+> | fixed | +1.7% | −0.9% | 0.67 | 4,020 |
+> | linear | +3.3% | −0.8% | 0.96 | 4,016 |
+> | sqrt_kelly | +5.8% | −1.2% | 1.08 | 1,673 |
+> | **kelly** | **+6.2%** | −1.5% | 1.05 | 1,673 |
+>
+> Every confidence-weighted rule now beats flat betting at equal capital, and
+> Sharpe rises monotonically with how much the stake varies — the exact opposite
+> of the ordering recorded below.
+>
+> The reason is the same defect that inflated everything else. Under a fixed
+> threshold, "above 0.60" pooled folds whose probability scales differed by
+> orders of magnitude, so confidence within the selected set was mostly a fold
+> label, not a strength. Ranking within each fold makes confidence comparable,
+> and the gradient appears:
+>
+> | confidence | trades | hit rate | avg net |
+> |---|---|---|---|
+> | [0.60, 0.65) | 1,169 | 65.5% | 0.856% |
+> | [0.65, 0.70) | 124 | 67.7% | 1.220% |
+> | [0.70, 0.80) | 89 | 71.9% | 1.353% |
+> | [0.80, 1.00] | 16 | 75.0% | 1.557% |
+>
+> corr(confidence, net return) = +0.17, against the ~0 reported below.
+>
+> **Two reasons not to bank this.** The Kelly rules decline 58.4% of signals for
+> want of funding, so their advantage mixes sizing with extra selection and is
+> not a clean sizing result. And the top confidence buckets hold 89 and 16
+> trades — the monotone tail is four points fitted on almost nothing. What is
+> solid is the direction and the `linear` row, which trades the same 4,016
+> signals as fixed and still wins on return, drawdown and Sharpe at once.
+>
+> **The general lesson is worth more than the result.** Two separate conclusions
+> in this document — meta-labelling and sizing — were "no signal here" findings
+> that turned out to be measurements of a broken selection rule. A null result
+> is only as trustworthy as the rule that produced the sample.
+
 Meta-labelling failed because the secondary's job overlapped the threshold's.
 Sizing is the job a threshold genuinely cannot do — a threshold says act or
 don't, and cannot say *how much*. So the second model was given that job
@@ -396,7 +493,38 @@ order fills only when price comes to it, so it declines exactly the trades where
 price ran the way the model predicted. Modelling the cheaper fee without that
 selection produces a number that is wrong in the most flattering direction.
 
-**BTCUSDT, 24h horizon, threshold 0.60, 4,217 signals:**
+> **Re-run 2026-09-11 under the rank rule.** The table below was produced with
+> the withdrawn 0.60 threshold. Re-running it with the corrected rule
+> (BTCUSDT, 24h horizon, top 8% by margin, 4,020 signals) keeps the conclusion
+> and changes the size of the effect:
+>
+> | Execution | Fill rate | Win rate | Return | Max DD | At 2x fees |
+> |---|---|---|---|---|---|
+> | taker | 100% | 53.4% | +54.5% | −23.3% | +22.2% |
+> | maker 0.05% chase, touch-fill | 100% | 56.2% | +78.9% | −20.9% | +63.3% |
+> | **maker 0.05% chase, strict fill** | 100% | 53.8% | **+56.9%** | −24.2% | **+40.6%** |
+> | maker 0.05% skip, strict fill | 74.4% | 56.6% | +56.6% | −18.6% | +47.0% |
+>
+> **The maker advantage on returns is now +2.4pp, not +13.8pp.** Under strict
+> fills every maker variant lands between +54.9% and +59.3% against taker's
+> +54.5% — inside the noise of a single backtest. The paragraph below calling
+> two thirds of the gain a fill-model artefact was right about the direction and
+> understated it: under the corrected selection rule, *almost all* of the
+> return advantage is the fill assumption.
+>
+> **The doubled-fee cushion survives and is the real reason to keep maker
+> execution.** +40.6% against +22.2% is a near-doubling, and it comes from
+> arithmetic rather than from any fill assumption: the round trip costs less, so
+> the break-even accuracy is lower. That is what the live paper trader is
+> buying — resilience to worse fills, not extra return.
+>
+> **`skip` is no longer clearly worse than taker** under the corrected rule
+> (+56.6% against +54.5%), unlike under the threshold. The chase-versus-skip
+> conclusion below is therefore weaker than stated: `chase` remains the default
+> because skipping still declines the trades where price ran, but the evidence
+> for it is now one backtest inside the noise band, not a clear ordering.
+
+**BTCUSDT, 24h horizon, threshold 0.60, 4,217 signals (WITHDRAWN RULE):**
 
 | Execution | Fill rate | Win rate | Return | Max DD | At 2x fees |
 |---|---|---|---|---|---|

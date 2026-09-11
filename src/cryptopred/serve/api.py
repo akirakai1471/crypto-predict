@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse
 
 from cryptopred.config import Config, load_config
 from cryptopred.ingest.storage import ParquetStore
+from cryptopred.models.registry import ModelRegistry
 from cryptopred.paper.trader import PaperTrader
 from cryptopred.serve.predictor import Predictor
 from cryptopred.serve.store import PredictionStore
@@ -38,12 +39,24 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     predictors: dict[tuple[str, str], Predictor] = {}
 
     def get_predictor(symbol: str, interval: str) -> Predictor:
+        """Cached, but invalidated when a newer model is saved.
+
+        The background runner reloads the registry every cycle. A cache that
+        never expires makes the dashboard show a different model's probabilities
+        from the ones being traded, with nothing on screen saying so — and the
+        two disagree most right after a retrain, which is exactly when someone
+        is looking.
+        """
         key = (symbol, interval)
-        if key not in predictors:
-            try:
-                predictors[key] = Predictor.from_registry(cfg, symbol, interval)
-            except FileNotFoundError as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        registry = ModelRegistry(cfg.data.root / "models")
+        current = registry.latest(symbol, interval)
+        cached = predictors.get(key)
+        if cached is not None and cached.bundle.metadata.get("version") == current:
+            return cached
+        try:
+            predictors[key] = Predictor.from_registry(cfg, symbol, interval)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return predictors[key]
 
     @app.get("/api/health")
@@ -77,16 +90,33 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 )
         return {"ok": True, "data": status}
 
+    def _rule(symbol: str, interval: str) -> dict[str, Any]:
+        """The cutoff the live system is actually applying, if a model is loaded."""
+        try:
+            meta = get_predictor(symbol, interval).bundle.metadata
+        except HTTPException:
+            return {"margin_cutoff": None, "signal_coverage": None}
+        return {
+            "margin_cutoff": meta.get("margin_cutoff"),
+            "signal_coverage": meta.get("signal_coverage"),
+        }
+
     @app.get("/api/predict")
     def predict(symbol: str = "BTCUSDT", interval: str = "1h") -> dict[str, Any]:
+        rule = _rule(symbol, interval)
         stored = predictions.latest_prediction(symbol, interval)
         if stored:
-            return {"source": "log", **stored}
+            # What decides the trade is the gap between the two directional
+            # probabilities, not the largest of the three. Showing the maximum
+            # would let a 0.45-versus-0.44 coin flip look like conviction.
+            margin = abs(float(stored["prob_up"]) - float(stored["prob_down"]))
+            return {"source": "log", "margin": margin, **rule, **stored}
 
         prediction = get_predictor(symbol, interval).predict_latest(symbol, interval)
         if prediction is None:
             raise HTTPException(status_code=503, detail="not enough bars to predict yet")
-        return {"source": "live", **prediction.as_dict()}
+        margin = abs(prediction.proba[2] - prediction.proba[0])
+        return {"source": "live", "margin": margin, **rule, **prediction.as_dict()}
 
     @app.get("/api/history")
     def history(
@@ -124,9 +154,13 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             # Repeated in the payload so no consumer can render the live numbers
             # without the caveat attached to them.
             "caveat": (
-                "Bằng chứng backtest chỉ là 1 cấu hình đạt trên 28 cấu hình đã xét — "
-                "xấp xỉ mức may rủi thuần tuý. ETHUSDT thất bại ở mọi ngưỡng. "
-                "Con số chạy thật bên dưới mới là bài kiểm tra thật. Chi tiết: docs/findings.md."
+                "Chạy cấu hình cố định trên 20 coin: 7/20 đạt (35%) — mức đã ghi trước "
+                "là KHÔNG KẾT LUẬN ĐƯỢC. Chạy lại bằng quy tắc đã sửa vẫn 7/20 nhưng "
+                "danh sách coin đạt chỉ trùng 4/7, nên việc một coin cụ thể đạt là gần "
+                "như tung đồng xu. Thứ vững nhất là độ chính xác hướng: trung bình "
+                "53.98%, 18/20 coin trên 50%. Mọi con số lợi nhuận từng báo cáo đều đã "
+                "bị thổi phồng bởi một lỗi hiệu chỉnh và đã được sửa — đừng đọc chúng "
+                "chính xác hơn mức sai số gấp đôi. Chi tiết: docs/findings.md."
             ),
         }
 
@@ -178,7 +212,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             "symbols": cfg.data.symbols,
             "intervals": cfg.data.intervals,
             "horizon_bars": cfg.labels.horizon_bars,
-            "signal_threshold": cfg.strategy.signal_threshold,
+            # The trading rule is a rank converted to a margin cutoff, stored
+            # per model. The old probability threshold is no longer consulted.
+            "signal_coverage": cfg.strategy.signal_coverage,
             "taker_fee": cfg.strategy.taker_fee,
             "slippage": cfg.strategy.slippage,
             "execution_style": cfg.strategy.execution.style,

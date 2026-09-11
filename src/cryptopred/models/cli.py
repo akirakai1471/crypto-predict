@@ -23,14 +23,14 @@ from cryptopred.backtest.sizing_report import (
 from cryptopred.config import load_config
 from cryptopred.dataset.builder import build_dataset, dataset_path
 from cryptopred.ingest.storage import ParquetStore
-from cryptopred.models.meta import signals_from_proba
-from cryptopred.models.metrics import evaluate
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.models.report import format_evaluation, verdict
-from cryptopred.models.selection import margin_cutoff
+from cryptopred.models.selection import margin_cutoff, signals_by_quantile_per_fold
 from cryptopred.models.train import (
     COVERAGE_TOLERANCE,
+    CUTOFF_HOLDOUT_BARS,
     TrainConfig,
+    apply_calibrators,
     coverage_check,
     train_fold,
     walk_forward_evaluate,
@@ -98,8 +98,15 @@ def train(
     bars = ParquetStore(cfg.data.root / "raw").read("klines", symbol, interval)
     if not bars.empty:
         test_index = dataset.index[-evaluation["n_test_total"] :]
+        # Score the rule that gets deployed, not the withdrawn threshold. The
+        # two disagree: the threshold run printed a -42.3% drawdown for a
+        # strategy this project does not trade.
         bt = run_strategy_backtest(
-            bars, evaluation, test_index, horizon=horizon, threshold=threshold
+            bars,
+            evaluation,
+            test_index,
+            horizon=horizon,
+            coverage=cfg.strategy.signal_coverage,
         )
         report += "\n\n" + format_backtest(bt, symbol=symbol, interval=interval)
 
@@ -136,8 +143,26 @@ def train(
         raise typer.Exit(code=1)
 
     # Final model: fit on everything except the last horizon bars, whose labels
-    # depend on prices that do not exist yet.
-    final_train = dataset.iloc[: -horizon or None]
+    # depend on prices that do not exist yet, and a holdout block reserved for
+    # setting the trading rule.
+    #
+    # The holdout is not optional. A cutoff derived from the fold models is too
+    # high for the final one: the final model trains on more data, calibrates
+    # better, and therefore produces narrower margins. The first attempt at this
+    # measured coverage on the final model's own training data, where margins are
+    # inflated, reported a healthy 12.87%, and then fired on 0 of 336 live bars.
+    # A rule can only be set on data the model has not seen.
+    usable = dataset.iloc[: -horizon or None]
+    holdout_n = min(CUTOFF_HOLDOUT_BARS, len(usable) // 5)
+    final_train = usable.iloc[:-holdout_n]
+    holdout = usable.iloc[-holdout_n:]
+    # Split again. A cutoff is a quantile of some sample, so measuring coverage on
+    # the sample it came from returns the target every time — a check that cannot
+    # fail. The rule is set on the older block and verified on the newest one, so
+    # a regime where margins have narrowed shows up as a failed check instead of
+    # as zero live signals.
+    rule_block = holdout.iloc[: int(len(holdout) * 2 / 3)]
+    verify_block = holdout.iloc[int(len(holdout) * 2 / 3) :]
     # Calibrate the final model from out-of-fold runs. The tail-block method is
     # fine inside a fold but degenerate here, where the tail is one recent regime.
     final_config = TrainConfig(
@@ -145,18 +170,16 @@ def train(
     )
     result = train_fold(final_train, final_train.tail(1), final_config, horizon=horizon)
 
-    # The metrics above came from fold models. This is a different fit, and it
-    # must behave like them or the numbers do not describe what gets deployed.
-    # The cutoff comes from the LAST fold's out-of-sample probabilities: the
-    # most recent conditions the model was honestly tested under. Deriving it
-    # from in-sample margins would set the bar too high, which is precisely the
-    # failure this replaces.
-    fold_sizes = [f["n_test"] for f in evaluation["folds"]]
-    last_fold_proba = evaluation["proba"][-fold_sizes[-1] :]
-    cutoff = margin_cutoff(last_fold_proba, cfg.strategy.signal_coverage)
+    # Both the cutoff and the check it is verified against come from the holdout,
+    # which this model never saw. Anything measured on its training data would
+    # describe a model that does not exist outside the fit.
+    rule_proba = np.asarray(result.booster.predict(rule_block[result.features]))
+    if result.calibrators:
+        rule_proba = apply_calibrators(rule_proba, result.calibrators)
+    cutoff = margin_cutoff(rule_proba, cfg.strategy.signal_coverage)
 
     check = coverage_check(
-        result, final_train, cfg.strategy.signal_coverage, cutoff
+        result, verify_block, cfg.strategy.signal_coverage, cutoff
     )
     typer.echo(
         f"\nSignal rule: trade the top {cfg.strategy.signal_coverage:.0%} by directional "
@@ -165,7 +188,7 @@ def train(
     typer.echo(
         f"Coverage check: target {check['expected_coverage']:.2%}, "
         f"saved model fires on {check['actual_coverage']:.2%} "
-        f"(ratio {check['ratio']:.1f}x)"
+        f"of {check['n_sample']:,} later unseen bars (ratio {check['ratio']:.1f}x)"
     )
     if not check["ok"]:
         typer.echo(
@@ -254,13 +277,17 @@ def sweep(
     ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
-    """Diagnostic: how signal count, accuracy and PnL vary with the threshold.
+    """Diagnostic: how signal count, accuracy and PnL vary with coverage.
+
+    Sweeps the rank rule, which is what gets deployed. It used to sweep the
+    probability threshold; that number no longer means anything, because the
+    same threshold selected 26.6% of one fold's bars and 0.03% of another's.
 
     READ THIS BEFORE USING THE OUTPUT. Picking the best row of this table and
     trading it is overfitting — the table is computed on the same out-of-sample
-    data used to judge the model, so the winning threshold is partly fitted to
+    data used to judge the model, so the winning coverage is partly fitted to
     that data's noise. Use it to understand the shape of the trade-off, then
-    validate any chosen threshold on data this sweep never touched.
+    validate any chosen coverage on data this sweep never touched.
     """
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     cfg = load_config(config)
@@ -285,29 +312,31 @@ def sweep(
     )
     test_index = dataset.index[-evaluation["n_test_total"] :]
 
-    typer.echo("\n*** DIAGNOSTIC ONLY — choosing a threshold from this table overfits it ***\n")
+    typer.echo("\n*** DIAGNOSTIC ONLY — choosing a coverage from this table overfits it ***\n")
     header = (
-        f"{'thresh':>7} {'signals':>9} {'sign_acc':>9} {'net_ret':>10} "
+        f"{'cover':>7} {'signals':>9} {'sign_acc':>9} {'net_ret':>10} "
         f"{'maxDD':>9} {'2x_cost':>10} {'robust':>7}"
     )
     typer.echo(header)
     typer.echo("-" * len(header))
 
-    for threshold in [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]:
-        metrics = evaluate(
-            evaluation["y_true"],
-            evaluation["proba"],
-            threshold=threshold,
-            forward_return=evaluation["forward_return"],
-        )
+    forward = np.asarray(evaluation["forward_return"])
+    for coverage in [0.02, 0.04, 0.06, 0.08, 0.12, 0.16, 0.25]:
         bt = run_strategy_backtest(
-            bars, evaluation, test_index, horizon=horizon, threshold=threshold
+            bars, evaluation, test_index, horizon=horizon, coverage=coverage
+        )
+        taken = bt["signals"]["signal"].to_numpy()
+        picked = taken != 0
+        sign_acc = (
+            float((np.sign(forward[picked]) == taken[picked]).mean())
+            if picked.any()
+            else None
         )
         base = bt["base"].summary
         doubled = bt["doubled_costs"].summary
         typer.echo(
-            f"{threshold:>7.2f} {metrics['n_signals']:>9,} "
-            f"{_num(metrics.get('sign_accuracy')):>9} "
+            f"{coverage:>6.0%} {int(picked.sum()):>9,} "
+            f"{_num(sign_acc):>9} "
             f"{_num(base.get('total_return'), pct=True):>10} "
             f"{_num(base.get('max_drawdown'), pct=True):>9} "
             f"{_num(doubled.get('total_return'), pct=True):>10} "
@@ -326,7 +355,9 @@ def sizing(
     symbol: str = typer.Option("BTCUSDT", help="Symbol to evaluate."),
     interval: str = typer.Option("1h", help="Bar interval."),
     horizon: int = typer.Option(None, help="Label horizon in bars, overriding the config."),
-    threshold: float = typer.Option(None, help="Signal threshold, overriding the config."),
+    coverage: float = typer.Option(
+        None, help="Fraction of bars to trade, overriding the config."
+    ),
     n_splits: int = typer.Option(5, help="Walk-forward folds."),
     rounds: int = typer.Option(400, help="LightGBM boosting rounds."),
     kelly_scale: float = typer.Option(
@@ -342,7 +373,7 @@ def sizing(
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     cfg = load_config(config)
     horizon = horizon or cfg.labels.horizon_bars.get(interval, 24)
-    threshold = threshold if threshold is not None else cfg.strategy.signal_threshold
+    coverage = coverage if coverage is not None else cfg.strategy.signal_coverage
 
     path = dataset_path(cfg, symbol, interval, horizon)
     if not path.exists():
@@ -359,12 +390,23 @@ def sizing(
         dataset,
         n_splits=n_splits,
         horizon=horizon,
-        config=TrainConfig(num_boost_round=rounds, signal_threshold=threshold),
+        config=TrainConfig(num_boost_round=rounds),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
     proba = evaluation["proba"]
-    signals = signals_from_proba(proba, threshold)
+    fold_ids = np.concatenate(
+        [np.full(f["n_test"], f["fold"]) for f in evaluation["folds"]]
+    )
+    signals = signals_by_quantile_per_fold(proba, fold_ids, coverage)
     confidence = proba.max(axis=1)
+
+    # The sizing rules scale a stake upward from a floor. That floor used to be
+    # the selection threshold; selection is now by rank, so the floor is the
+    # weakest confidence that got through. Sizes then run from zero at the
+    # marginal signal to full at the strongest, which is what the Kelly formula
+    # is being asked to express.
+    taken = confidence[signals != 0]
+    threshold = float(taken.min()) if taken.size else 0.5
 
     # The payoff being sized: how far price actually travels over this horizon.
     forward = (bars["close"].shift(-horizon) / bars["close"] - 1).dropna()
@@ -399,7 +441,9 @@ def execution(
     symbol: str = typer.Option("BTCUSDT", help="Symbol to evaluate."),
     interval: str = typer.Option("1h", help="Bar interval."),
     horizon: int = typer.Option(None, help="Label horizon in bars, overriding the config."),
-    threshold: float = typer.Option(None, help="Signal threshold, overriding the config."),
+    coverage: float = typer.Option(
+        None, help="Fraction of bars to trade, overriding the config."
+    ),
     maker_fee: float = typer.Option(0.0002, help="Maker fee per side."),
     n_splits: int = typer.Option(5, help="Walk-forward folds."),
     rounds: int = typer.Option(400, help="LightGBM boosting rounds."),
@@ -410,11 +454,15 @@ def execution(
     The maker fee is roughly a third of the taker cost, which sharply lowers the
     break-even accuracy. The catch is that a limit order fills only when price
     comes to it, so it skips a biased sample of trades.
+
+    Selects trades by the rank rule. The first run of this comparison used the
+    probability threshold, which selected 26.6% of one fold and 0.03% of another;
+    the maker/taker gap it reported was measured on that lopsided sample.
     """
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     cfg = load_config(config)
     horizon = horizon or cfg.labels.horizon_bars.get(interval, 24)
-    threshold = threshold if threshold is not None else cfg.strategy.signal_threshold
+    coverage = coverage if coverage is not None else cfg.strategy.signal_coverage
 
     path = dataset_path(cfg, symbol, interval, horizon)
     if not path.exists():
@@ -431,10 +479,13 @@ def execution(
         dataset,
         n_splits=n_splits,
         horizon=horizon,
-        config=TrainConfig(num_boost_round=rounds, signal_threshold=threshold),
+        config=TrainConfig(num_boost_round=rounds),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
-    signals = signals_from_proba(evaluation["proba"], threshold)
+    fold_ids = np.concatenate(
+        [np.full(f["n_test"], f["fold"]) for f in evaluation["folds"]]
+    )
+    signals = signals_by_quantile_per_fold(evaluation["proba"], fold_ids, coverage)
 
     costs = CostModel(
         taker_fee=cfg.strategy.taker_fee,

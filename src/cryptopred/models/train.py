@@ -318,7 +318,26 @@ def walk_forward_evaluate(
 
 # A saved model whose signal rate differs from the evaluated one by more than
 # this factor is not the model that was evaluated, whatever the metrics said.
-COVERAGE_TOLERANCE = 3.0
+# How far the saved model's signal rate may drift from the planned one before it
+# is refused. Sampling noise on a 1,000-bar check at 8% coverage is about ±1.3x
+# at two sigma, so 2.0 sits clearly outside noise while still catching the real
+# failures: a 2.5x shortfall means the strategy trades less than half as often as
+# the backtest it was approved on, over different bars.
+#
+# Was 3.0, which passed a model that fired on 3.2% of unseen bars against an 8%
+# target. Loosening this is how a broken rule ships.
+COVERAGE_TOLERANCE = 2.0
+
+# Bars withheld from the final fit so the trading rule can be set on data the
+# deployed model has never seen. Roughly four months of hourly bars: enough for a
+# stable quantile, small enough that the model stays current.
+CUTOFF_HOLDOUT_BARS = 3000
+
+
+def apply_calibrators(raw, calibrators):
+    """Public wrapper: callers outside this module need the same mapping the
+    trainer applies, or they would compute a cutoff on a different scale."""
+    return _apply_calibrators(raw, calibrators)
 
 
 def coverage_check(
@@ -335,6 +354,11 @@ def coverage_check(
     a final model calibrated on one recent block once produced signals on 0.3% of
     bars where the folds produced 8.4%, which would have left a live test unable
     to record anything at all while every report still looked healthy.
+
+    `dataset` must be data the model was not fitted on AND the cutoff was not
+    derived from. The first version of this check ran on the model's own training
+    rows, where margins are wide; it reported 12.87% coverage on a model that then
+    fired on 0 of 336 live bars.
     """
     from cryptopred.models.selection import signals_from_margin
 

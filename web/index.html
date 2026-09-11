@@ -302,7 +302,34 @@ function meterRow(label, value, cls, threshold) {
 
 function signalCard(p, cfg) {
   const v = signalWord(p.signal);
-  const t = cfg.signal_threshold;
+  const cutoff = p.margin_cutoff;
+  const margin = p.margin;
+
+  // What decides the trade is the gap between the two directional probabilities,
+  // not the largest of the three. A 0.45-versus-0.44 bar has a big maximum and
+  // is a coin flip, so the margin gets its own meter and the probabilities are
+  // shown underneath as context rather than as the rule.
+  let decision = "";
+  if (cutoff != null && margin != null) {
+    const scale = Math.max(cutoff * 2.5, margin * 1.15, 0.05);
+    decision = `<div class="meter-row">
+      <span class="meter-label">Độ chênh</span>
+      <span class="meter-track">
+        <span class="meter-fill ${margin >= cutoff ? (p.signal === -1 ? "down" : "up") : "flat"}"
+              style="width:${Math.min(100, margin / scale * 100).toFixed(1)}%"></span>
+        <span class="threshold-mark" style="left:${Math.min(100, cutoff / scale * 100).toFixed(1)}%"></span>
+      </span>
+      <span class="meter-val num">${(margin * 100).toFixed(2)}%</span>
+    </div>
+    <p class="meter-note">Vạch đen = mốc ${(cutoff * 100).toFixed(2)}%, tức
+    ${cfg.signal_coverage ? fmtPct(cfg.signal_coverage, 0) : "8%"} số nến có độ chênh lớn nhất.
+    Độ chênh = |P(tăng) − P(giảm)|. Chưa vượt vạch thì đứng ngoài — đó là trạng thái
+    mặc định, không phải lỗi.</p>`;
+  } else {
+    decision = `<p class="meter-note">Model chưa có mốc quyết định, nên hệ thống không
+    giao dịch. Train lại bằng <code>cryptopred-model train --save</code>.</p>`;
+  }
+
   return `<article class="card">
     <div class="sig-head">
       <span class="sig-sym">${p.symbol}</span>
@@ -310,11 +337,12 @@ function signalCard(p, cfg) {
     </div>
     <div class="verdict ${v.cls}">${v.text}</div>
     <div class="meter">
-      ${meterRow("Giảm", p.prob_down, "down", t)}
+      ${decision}
+      <p class="eyebrow" style="margin:14px 0 8px">Xác suất thô</p>
+      ${meterRow("Giảm", p.prob_down, "down", null)}
       ${meterRow("Đứng yên", p.prob_flat, "flat", null)}
-      ${meterRow("Tăng", p.prob_up, "up", t)}
-      <p class="meter-note">Vạch đen = ngưỡng ${fmtPct(t, 0)}. Xác suất chưa vượt vạch thì hệ thống đứng ngoài —
-      đó là trạng thái mặc định, không phải lỗi. Nến đóng ${shortTime(p.bar_close_time)} UTC.</p>
+      ${meterRow("Tăng", p.prob_up, "up", null)}
+      <p class="meter-note">Nến đóng ${shortTime(p.bar_close_time)} UTC.</p>
     </div>
   </article>`;
 }
@@ -430,7 +458,7 @@ async function load() {
     } catch (e) {
       const noModel = /no model in the registry/i.test(e.message);
       const note = noModel
-        ? "Chưa có model cho coin này. Model chỉ được lưu khi vượt cổng kiểm — ETHUSDT hiện thất bại ở mọi ngưỡng nên không có model, và đó là kết quả đúng chứ không phải lỗi."
+        ? "Chưa có model cho coin này. Model chỉ được lưu khi vượt cổng kiểm, và cổng còn chặn cả model có tỉ lệ ra tín hiệu khác với lúc đánh giá. Không có model là kết quả đúng, không phải lỗi."
         : `Chưa dự đoán được: ${String(e.message).slice(0, 160)}`;
       cards.push(`<article class="card"><div class="sig-head"><span class="sig-sym">${symbol}</span></div>
         <div class="verdict idle">KHÔNG CÓ MODEL</div>
@@ -545,10 +573,10 @@ async function load() {
     ? `<br><br><strong>Cảnh báo cổng kiểm:</strong> ${overrideNotes.join(" · ")}`
     : "";
   document.getElementById("caveat").innerHTML =
-    `<strong>Đọc trước khi tin số:</strong> ${caveatText || "Bằng chứng backtest là 1 cấu hình đạt trên 28 cấu hình đã xét — xấp xỉ mức may rủi. ETHUSDT thất bại ở mọi ngưỡng. Xem docs/findings.md."}${overrideHtml}`;
+    `<strong>Đọc trước khi tin số:</strong> ${caveatText || "Xem docs/findings.md."}${overrideHtml}`;
 
   document.getElementById("footer").textContent =
-    `Horizon ${cfg.horizon_bars["1h"]} nến · ngưỡng ${(cfg.signal_threshold * 100).toFixed(0)}% · ${cfg.execution_style === "maker" ? `lệnh limit, phí maker ${(cfg.maker_fee * 100).toFixed(3)}%` : `lệnh market, phí taker ${(cfg.taker_fee * 100).toFixed(3)}%`}/chiều · không có kết nối giao dịch thật`;
+    `Horizon ${cfg.horizon_bars["1h"]} nến · giao dịch ${fmtPct(cfg.signal_coverage, 0)} số nến có độ chênh lớn nhất · ${cfg.execution_style === "maker" ? `lệnh limit, phí maker ${(cfg.maker_fee * 100).toFixed(3)}%` : `lệnh market, phí taker ${(cfg.taker_fee * 100).toFixed(3)}%`}/chiều · không có kết nối giao dịch thật`;
 }
 
 load().catch(err => {

@@ -192,3 +192,39 @@ def test_coverage_check_reports_both_rates_for_the_reader():
     check = coverage_check(result, df, expected_coverage=0.08, cutoff=cutoff)
     assert "expected_coverage" in check and "actual_coverage" in check
     assert check["n_sample"] > 0
+
+
+def test_coverage_check_catches_a_cutoff_set_on_the_models_own_training_rows():
+    """The bug this replaced: a rule tuned in-sample, verified in-sample.
+
+    A model's margins on rows it was fitted on are wider than on anything else,
+    so a quantile taken there sets a bar the model clears only where it has
+    memorised the answer. The shipped version reported 12.87% coverage this way
+    and then fired on 0 of 336 live bars.
+    """
+    from cryptopred.models.selection import margin_cutoff
+    from cryptopred.models.train import _apply_calibrators, coverage_check
+
+    df = _learnable_dataset(n=4000)
+    cfg = TrainConfig(
+        num_boost_round=300,
+        num_leaves=255,
+        min_data_in_leaf=2,
+        calibration_method="oof",
+        calibration_splits=3,
+    )
+    train, unseen = df.iloc[:3000], df.iloc[3000:]
+    result = train_fold(train, unseen, cfg, horizon=4)
+
+    features = [f for f in result.features if f in train.columns]
+    raw = np.asarray(result.booster.predict(train.tail(1000)[features]))
+    in_sample = (
+        _apply_calibrators(raw, result.calibrators) if result.calibrators else raw
+    )
+    cutoff = margin_cutoff(in_sample, coverage=0.08)
+
+    check = coverage_check(result, unseen, expected_coverage=0.08, cutoff=cutoff)
+    assert not check["ok"], (
+        f"in-sample cutoff {cutoff:.4f} produced {check['actual_coverage']:.2%} "
+        "out of sample and the check let it through"
+    )

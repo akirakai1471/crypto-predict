@@ -38,9 +38,12 @@ def test_health_reports_bar_counts(client):
     assert body["data"][0]["bars"] == 1200
 
 
-def test_config_endpoint_exposes_threshold(client):
+def test_config_endpoint_exposes_the_rule_actually_applied(client):
+    """Coverage, not a probability threshold: the threshold was a calibration
+    artefact and is no longer consulted anywhere in the trading path."""
     body = client.get("/api/config").json()
-    assert body["signal_threshold"] == pytest.approx(0.60)
+    assert body["signal_coverage"] == pytest.approx(0.08)
+    assert "signal_threshold" not in body
     assert body["horizon_bars"]["1h"] == 24
 
 
@@ -63,7 +66,8 @@ def test_history_returns_rows(client):
 
 def test_metrics_always_carries_the_caveat(client):
     body = client.get("/api/metrics?symbol=BTCUSDT&interval=1h").json()
-    assert "28" in body["caveat"]
+    assert "7/20" in body["caveat"]
+    assert "findings.md" in body["caveat"]
     assert body["live"]["n_scored"] == 0
     assert body["live"]["accuracy"] is None
 

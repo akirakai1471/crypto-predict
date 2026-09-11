@@ -68,6 +68,14 @@ def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
         scored_signals = scored[scored["signal"] != 0]
         correct_signals = int(scored_signals["is_correct"].sum()) if not scored_signals.empty else 0
 
+        # Backfilled rows carry a weaker guarantee, not none. The model saw no
+        # future data, so the prediction is the one it would have made; what is
+        # missing is proof that it was written first. Reported separately rather
+        # than discarded, because discarding them can mean reporting nothing at
+        # all while the scheduler is not staying up.
+        bf_scored = backfilled[backfilled["actual_return"].notna()]
+        bf_correct = int(bf_scored["is_correct"].sum()) if not bf_scored.empty else 0
+
         closed = store.closed_trades(symbol, limit=100_000)
         rested = (
             int(closed["entry_was_maker"].fillna(0).sum())
@@ -82,6 +90,12 @@ def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
                 "n_live": int(len(live)),
                 "n_backfilled": int(len(backfilled)),
                 "n_scored": int(len(scored)),
+                "n_backfilled_scored": int(len(bf_scored)),
+                "backfilled_correct": bf_correct,
+                "backfilled_accuracy": (
+                    bf_correct / len(bf_scored) if len(bf_scored) else None
+                ),
+                "backfilled_interval_95": wilson_interval(bf_correct, len(bf_scored)),
                 "n_signals": int(len(signals)),
                 "n_scored_signals": int(len(scored_signals)),
                 "correct_signals": correct_signals,
@@ -156,6 +170,21 @@ def format_status(status: dict[str, Any], backtest_reference: float = 0.589) -> 
             lines.append(
                 "                      cannot prove it was not influenced by it"
             )
+            if s["n_backfilled_scored"]:
+                low, high = s["backfilled_interval_95"]
+                lines.append(
+                    f"    their accuracy:   {s['backfilled_accuracy']:.1%} "
+                    f"({s['backfilled_correct']}/{s['n_backfilled_scored']}), "
+                    f"95% CI [{low:.1%}, {high:.1%}]"
+                )
+                lines.append(
+                    "                      weaker evidence than the live rows above, "
+                    "stronger than none — the"
+                )
+                lines.append(
+                    "                      model used no future data, but the row "
+                    "cannot prove it was written first"
+                )
 
         n = s["n_scored_signals"]
         if n == 0:

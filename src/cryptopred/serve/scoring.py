@@ -13,7 +13,21 @@ from cryptopred.features.volatility import atr
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.serve.store import PredictionStore
 
-SIGNAL_TO_LABEL = {1: 1, -1: -1, 0: 0}
+
+def _predicted_label(row) -> int:
+    """What the model said, which is not the same as what the strategy did.
+
+    `signal` is 0 both when the model predicts FLAT and when it leans a direction
+    too weakly for the strategy to act. Scoring the second case as a FLAT
+    prediction marks the model wrong for being right but cautious — it predicted
+    UP, the market went up, and the row reads "sai" because no trade was placed.
+
+    The model's prediction is the argmax of the probabilities it recorded.
+    Whether that prediction was traded is a separate question, answered by
+    `signal` and reported separately.
+    """
+    probs = (float(row["prob_down"]), float(row["prob_flat"]), float(row["prob_up"]))
+    return int(max(range(3), key=lambda i: probs[i])) - 1
 
 
 def score_pending(
@@ -71,9 +85,7 @@ def score_pending(
         else:
             actual_label = 0
 
-        predicted_label = SIGNAL_TO_LABEL[int(row["signal"])]
-        # A no-signal bar is not a directional call; it counts as correct only
-        # when the market really did go nowhere.
+        predicted_label = _predicted_label(row)
         is_correct = predicted_label == actual_label
 
         prediction_store.score_prediction(

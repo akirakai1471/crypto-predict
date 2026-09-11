@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from cryptopred.backtest.engine import CostModel, backtest
+from cryptopred.models.selection import signals_by_quantile_per_fold
 
 DOWN, FLAT, UP = 0, 1, 2
 
@@ -30,6 +31,23 @@ def probabilities_to_signals(
     return pd.DataFrame({"signal": signal, "confidence": confidence}, index=index)
 
 
+def signals_by_coverage(
+    evaluation: dict[str, Any], index: pd.Index, coverage: float
+) -> pd.DataFrame:
+    """The rank rule: trade each fold's most confident `coverage` of bars.
+
+    Ranking is scale-invariant, so a fold whose calibrated probabilities run
+    high cannot monopolise the trades. A fixed threshold is not: under one it
+    produced 26.6% of one fold's bars and 0.03% of another's.
+    """
+    fold_ids = np.concatenate(
+        [np.full(f["n_test"], f["fold"]) for f in evaluation["folds"]]
+    )
+    signal = signals_by_quantile_per_fold(evaluation["proba"], fold_ids, coverage)
+    confidence = evaluation["proba"].max(axis=1)
+    return pd.DataFrame({"signal": signal, "confidence": confidence}, index=index)
+
+
 def run_strategy_backtest(
     bars: pd.DataFrame,
     evaluation: dict[str, Any],
@@ -37,14 +55,23 @@ def run_strategy_backtest(
     horizon: int,
     threshold: float = 0.5,
     costs: CostModel | None = None,
+    coverage: float | None = None,
 ) -> dict[str, Any]:
     """Backtest the out-of-sample predictions, plus robustness variants.
 
     The doubled-cost run is not decoration: an edge that only survives at the
     quoted fee is an edge that will not survive a bad fill.
+
+    Pass `coverage` to score the rank rule that actually gets deployed. Without
+    it this scores the probability threshold, which the project has withdrawn:
+    the report then prints a drawdown belonging to a strategy nobody trades.
     """
     costs = costs or CostModel()
-    signals = probabilities_to_signals(evaluation["proba"], test_index, threshold)
+    signals = (
+        signals_by_coverage(evaluation, test_index, coverage)
+        if coverage is not None
+        else probabilities_to_signals(evaluation["proba"], test_index, threshold)
+    )
     window = bars.loc[test_index.min() : test_index.max()]
 
     base = backtest(window, signals, horizon=horizon, costs=costs)
