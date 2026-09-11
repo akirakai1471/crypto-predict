@@ -1,0 +1,40 @@
+==========================================================================
+META-LABELLED STACK — BTCUSDT, horizon 24 bars
+==========================================================================
+Primary coverage: 20% of bars  (loose on purpose — the secondary filters)
+Meta threshold:   0.55
+
+                             PRIMARY ALONE    WITH META FILTER
+--------------------------------------------------------------------------
+signals taken                       10,046               6,774
+coverage of bars                     20.0%               13.5%
+sign accuracy                       57.16%              58.53%
+win rate                            51.79%              53.78%
+total return                        +93.6%             +120.2%
+max drawdown                        -29.0%              -27.9%
+Sharpe                                0.65                0.83
+return at 2x costs                   +7.7%              +48.3%
+survives 2x costs                     True                True
+
+BY SIDE, WITH THE META FILTER
+   side    trades   win rate   avg return
+--------------------------------------------------------------------------
+   LONG     6,732    53.79%       0.308%
+  SHORT        42    52.38%       0.081%
+
+DIRECTIONAL VERDICT: UNPROVEN
+  only 42 short trades — too few to judge the short side
+
+PER FOLD
+  fold 0: meta trained on 1,393 simulated trades (56.5% profitable), 2,009 → 1,964 signals
+  fold 1: meta trained on 2,919 simulated trades (54.4% profitable), 2,009 → 1,287 signals
+  fold 2: meta trained on 4,418 simulated trades (57.6% profitable), 2,009 → 1,581 signals
+  fold 3: meta trained on 5,934 simulated trades (53.2% profitable), 2,009 → 629 signals
+  fold 4: meta trained on 7,420 simulated trades (51.0% profitable), 2,010 → 1,313 signals
+
+BENCHMARK — one model alone under the production rule, top 8% by rank
+  signals 4,020   return +79.5%   drawdown -17.5%   at 2x costs +42.0%   UNPROVEN
+
+==========================================================================
+VERDICT: IMPROVEMENT — beats both its own primary and the simple production model
+==========================================================================

@@ -191,8 +191,25 @@ def _verdict(
     """
     if not meta["survives_doubled_costs"]:
         return "NO-GO — the filtered strategy does not survive doubled costs"
-    if meta["two_sided"]["decision"] == "ONE-SIDED":
-        return "NO-GO — profitable on one side only, which is market drift, not prediction"
+    if meta["two_sided"]["decision"] != "TWO-SIDED":
+        # UNPROVEN used to pass here, and a run reached "IMPROVEMENT" with 6,732
+        # long trades against 42 short ones. Being unable to judge the short side
+        # is not evidence for the strategy: a 99% long book is a bet on the
+        # market rising, which this sample does regardless of the model.
+        return (
+            f"NO-GO — {meta['two_sided']['decision'].lower()}: "
+            f"{meta['two_sided']['reason']}. "
+            "Only a strategy that earns on both sides is distinguishable from drift"
+        )
+    if benchmark is not None and meta["coverage"] > benchmark["coverage"] * 1.25:
+        # More trades is more exposure, and more exposure earns more in a rising
+        # sample without predicting anything. The sizing study had to be thrown
+        # out and redone for exactly this.
+        return (
+            f"NOT COMPARABLE — the stack trades {meta['coverage']:.1%} of bars against "
+            f"{benchmark['coverage']:.1%} for the benchmark. A higher return on more "
+            "capital is not evidence of a better filter; match the exposure first"
+        )
     if meta["total_return"] <= primary["total_return"]:
         return (
             "NO BENEFIT — the second model does not beat the primary it filters; "

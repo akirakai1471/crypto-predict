@@ -319,6 +319,50 @@ test that noise cannot pass by luck, not another cell in a search grid.
 
 ## Meta-labelling: the technique works, the stack does not pay for itself
 
+> **Re-run 2026-09-11 under the rank rule. Conclusion unchanged; the reasons
+> changed entirely, and finding that out required fixing the gate.**
+>
+> Meta-labelling also selected its primary signals by a fixed probability
+> threshold (0.40), across inner folds that each fit their own calibrator. Same
+> defect as everywhere else, so the original "no benefit" result was measured on
+> a lopsided sample. `MetaConfig.primary_coverage` now ranks within each inner
+> fold. Re-run on BTCUSDT, 24h horizon:
+>
+> | | primary alone (20%) | with meta filter | benchmark (top 8%) |
+> |---|---|---|---|
+> | signals | 10,046 | 6,774 | 4,020 |
+> | coverage | 20.0% | 13.5% | 8.0% |
+> | sign accuracy | 57.16% | 58.53% | — |
+> | total return | +93.6% | +120.2% | +79.5% |
+> | max drawdown | −29.0% | −27.9% | **−17.5%** |
+> | at 2x costs | +7.7% | +48.3% | +42.0% |
+>
+> The report initially printed **IMPROVEMENT**. It was wrong, and two gates had
+> to be tightened before it stopped being wrong:
+>
+> **The stack is 99.4% long.** 6,732 long trades against 42 short. The two-sided
+> check returned UNPROVEN — too few shorts to judge — and only ONE-SIDED was
+> being gated, so "we cannot tell" passed as though it were "it works". Being
+> unable to measure the short side is not evidence for a strategy; a book that
+> is 99% long is a bet on the market rising, which this sample does on its own.
+> UNPROVEN now fails.
+>
+> **The comparison was not exposure-matched.** 13.5% of bars against the
+> benchmark's 8.0% is 69% more trades and therefore 69% more capital at risk.
+> More money earns more money in a rising sample without predicting anything.
+> This is the same error that invalidated the first sizing comparison, made
+> again in a different file. The verdict now refuses to compare a stack that
+> trades more than 1.25x the benchmark's coverage.
+>
+> Under the corrected gates the run reads **NO-GO**. And the drawdown column
+> settles it independently of any gate: the stack draws down 27.9% where the
+> plain production rule draws down 17.5%, for a return advantage that comes from
+> carrying more risk in one direction.
+>
+> What the re-run *does* confirm is the sizing finding: the secondary genuinely
+> improves sign accuracy, 57.16% → 58.53%. The information is there. Neither
+> way of spending it — filtering or sizing — survives contact with the gates.
+
 The idea: run the primary model loose so it produces many signals, simulate the
 trade each one would have made, and train a second model on those outcomes to
 decide which signals are worth taking. Two questions, two models — "which way?"

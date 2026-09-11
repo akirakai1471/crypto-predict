@@ -27,7 +27,7 @@ def test_no_go_when_doubled_costs_kill_it():
 
 def test_no_go_when_one_sided():
     v = _verdict(_scored(0.1), _scored(0.5, decision="ONE-SIDED"))
-    assert "one side only" in v
+    assert v.startswith("NO-GO") and "one-sided" in v
 
 
 def test_no_benefit_when_it_loses_to_its_own_primary():
@@ -98,3 +98,32 @@ def test_report_renders_with_a_real_config():
     )
     assert "Primary coverage" in text
     assert "top 8% by rank" in text
+
+
+def test_an_unprovable_short_side_does_not_pass():
+    """A run reached IMPROVEMENT with 6,732 long trades against 42 short ones.
+    Being unable to judge the short side is not evidence for the strategy."""
+    meta = _scored(1.20, decision="UNPROVEN")
+    v = _verdict(_scored(0.94), meta, _scored(0.80))
+    assert v.startswith("NO-GO")
+    assert "both sides" in v
+
+
+def test_a_stack_that_trades_more_is_not_compared_on_return_alone():
+    """More exposure earns more in a rising sample without predicting anything."""
+    meta = _scored(1.20)
+    meta["coverage"] = 0.135
+    benchmark = _scored(0.80)
+    benchmark["coverage"] = 0.08
+    v = _verdict(_scored(0.94), meta, benchmark)
+    assert v.startswith("NOT COMPARABLE")
+
+
+def test_a_matched_stack_that_genuinely_wins_still_passes():
+    """The gates must not be unfailable in the other direction."""
+    meta = _scored(1.20, drawdown=-0.15)
+    meta["coverage"] = 0.085
+    benchmark = _scored(0.80)
+    benchmark["coverage"] = 0.08
+    v = _verdict(_scored(0.94, drawdown=-0.20), meta, benchmark)
+    assert v.startswith("IMPROVEMENT")
