@@ -15,6 +15,7 @@ from cryptopred.models.meta import MetaConfig, walk_forward_meta
 from cryptopred.models.meta_report import format_meta_report, score_signals
 from cryptopred.models.selection import signals_by_quantile_per_fold
 from cryptopred.models.train import TrainConfig
+from cryptopred.report_io import emit
 
 app = typer.Typer(help="Train and evaluate the meta-labelled two-model stack.")
 logger = logging.getLogger(__name__)
@@ -104,14 +105,8 @@ def run(
         config=meta_config, folds=result["folds"],
         benchmark=benchmark_scored, benchmark_threshold=benchmark_threshold,
     )
-    typer.echo(report)
-
-    reports_dir = cfg.data.root / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
-    (reports_dir / f"meta_{symbol}_{interval}_h{horizon}_{stamp}.txt").write_text(
-        report, encoding="utf-8"
-    )
+    emit(report, cfg.data.root / "reports" / f"meta_{symbol}_{interval}_h{horizon}_{stamp}.txt")
 
 
 if __name__ == "__main__":

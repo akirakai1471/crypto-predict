@@ -43,6 +43,7 @@ from cryptopred.models.validation import (
     format_sizing_validation,
     format_validation,
 )
+from cryptopred.report_io import emit
 
 app = typer.Typer(help="Train models and run walk-forward evaluation.")
 logger = logging.getLogger(__name__)
@@ -498,13 +499,10 @@ def execution(
         bars, index, signals, horizon=horizon, costs=costs, maker_fee=maker_fee
     )
     report = format_execution_comparison(results, symbol, horizon)
-    typer.echo(report)
-
-    reports_dir = cfg.data.root / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
-    (reports_dir / f"execution_{symbol}_{interval}_h{horizon}_{stamp}.txt").write_text(
-        report, encoding="utf-8"
+    emit(
+        report,
+        cfg.data.root / "reports" / f"execution_{symbol}_{interval}_h{horizon}_{stamp}.txt",
     )
 
 
@@ -568,12 +566,9 @@ def validate(
         if sizing_arm
         else format_validation(results, frozen)
     )
-    typer.echo("\n" + report)
-
-    reports_dir = cfg.data.root / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
-    (reports_dir / f"validation_{interval}_{stamp}.txt").write_text(report, encoding="utf-8")
+    kind = "sizing" if sizing_arm else "validation"
+    emit(report, cfg.data.root / "reports" / f"{kind}_{interval}_{stamp}.txt")
 
 
 @app.command()
