@@ -26,6 +26,13 @@ class Measured:
     ci95: tuple[float, float] | None = None
     method: str = ""
 
+    def __post_init__(self) -> None:
+        if self.n <= 0:
+            raise ValueError(
+                "Measured needs n > 0. A figure computed from no observations is "
+                "not a measurement; return Unavailable instead."
+            )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "source": "measured",
@@ -58,6 +65,8 @@ class Convention:
             )
 
     def to_dict(self) -> dict[str, Any]:
+        if self.validated and not self.evidence:
+            raise ValueError("validated Convention reached to_dict() without evidence")
         out: dict[str, Any] = {
             "source": "convention",
             "value": self.value,
