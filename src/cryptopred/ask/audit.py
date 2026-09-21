@@ -31,6 +31,11 @@ LIMITATION = (
 
 _NUMBER = re.compile(r"-?\d[\d.,]*\d|-?\d")
 
+# A date is not a claim about the market. Without this the year in "ngày
+# 21/09/2026" is flagged as unsourced, and an audit that cries wolf on a true
+# statement spends the credibility of the one signal this feature rests on.
+_DATE = re.compile(r"\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2}")
+
 
 def _parse(token: str) -> list[float]:
     """Both conventions, because the answer is Vietnamese and the tools are not.
@@ -81,12 +86,25 @@ def _matches(figure: float, tool_numbers: list[float]) -> bool:
     return False
 
 
+def _is_percentage(answer: str, end: int) -> bool:
+    """Is the figure ending at `end` written as a percentage?
+
+    Allows one space, because "31.2 %" is as common as "31.2%" in Vietnamese
+    prose and the two must be treated alike.
+    """
+    return answer[end : end + 2].lstrip().startswith("%")
+
+
 def audit_answer(answer: str, tool_numbers: list[float]) -> dict[str, Any]:
     """Match every figure in the answer against the numbers tools returned."""
     matched: list[float] = []
     unmatched: list[float] = []
+    date_spans = [m.span() for m in _DATE.finditer(answer)]
 
     for match in _NUMBER.finditer(answer):
+        if any(start <= match.start() < end for start, end in date_spans):
+            continue
+
         readings = _parse(match.group())
         if not readings:
             continue
@@ -98,7 +116,15 @@ def audit_answer(answer: str, tool_numbers: list[float]) -> dict[str, Any]:
 
         # Nothing matched. A small bare integer is sentence structure rather
         # than a claim; anything larger is a figure the reader could act on.
-        if all(abs(r) < TRIVIAL_BELOW and float(r).is_integer() for r in readings):
+        #
+        # A percentage is never structure, whatever its size. "60%" against a
+        # measured 58.4% is wrong by more than the tolerance and is exactly the
+        # kind of number this audit exists to catch — it was slipping through
+        # only for want of a decimal point.
+        trivial = all(
+            abs(r) < TRIVIAL_BELOW and float(r).is_integer() for r in readings
+        )
+        if trivial and not _is_percentage(answer, match.end()):
             continue
         unmatched.append(readings[0])
 

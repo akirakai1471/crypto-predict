@@ -174,12 +174,56 @@ def test_the_system_prompt_is_cached(cfg):
 
 def test_the_loop_stops_rather_than_running_forever(cfg):
     """A model that keeps calling tools must not spin indefinitely."""
-    from cryptopred.ask.session import MAX_TOOL_ROUNDS
+    from cryptopred.ask.session import MAX_REQUESTS
 
     client = FakeClient(
         [_tool_call("market_snapshot", {"symbol": "BTCUSDT"}, tool_id=f"t{i}")
-         for i in range(MAX_TOOL_ROUNDS + 5)]
+         for i in range(MAX_REQUESTS + 5)]
     )
     result = answer_question("test", cfg=cfg, client=client)
-    assert len(client.calls) <= MAX_TOOL_ROUNDS + 1
+    assert len(client.calls) == MAX_REQUESTS
     assert "quá nhiều" in result.answer.lower() or result.answer
+
+
+def test_a_truncated_answer_says_it_was_truncated(cfg):
+    """The loop breaks on 'no tool calls', which is true of max_tokens too.
+    Returning that text unmarked would show a cut-off answer as a finished one."""
+    cut = _Response([_Block("text", text="Giá đang")], stop_reason="max_tokens")
+    result = answer_question("test", cfg=cfg, client=FakeClient([cut]))
+    assert "cắt giữa chừng" in result.answer
+    assert "max_tokens" in result.answer
+
+
+def test_usage_accumulates_across_every_round_not_just_the_last(cfg):
+    """The cost shown must be the cost of the question, not of its last request."""
+    client = FakeClient(
+        [
+            _tool_call("market_snapshot", {"symbol": "BTCUSDT"}, tool_id="a"),
+            _tool_call("indicators", {"symbol": "BTCUSDT"}, tool_id="b"),
+            _text("xong"),
+        ]
+    )
+    result = answer_question("test", cfg=cfg, client=client)
+    assert len(client.calls) == 3
+    assert result.usage["input_tokens"] == 3000  # 1000 per request
+    assert result.usage["output_tokens"] == 600
+
+
+def test_tool_results_are_sent_as_json_not_a_python_repr(cfg):
+    """A repr sends True/False and single quotes; a stray nan would go as a
+    bare word the model cannot parse."""
+    import json
+
+    client = FakeClient(
+        [_tool_call("market_snapshot", {"symbol": "BTCUSDT"}), _text("ok")]
+    )
+    answer_question("test", cfg=cfg, client=client)
+    block = next(
+        b
+        for m in client.calls[1]["messages"]
+        if isinstance(m.get("content"), list)
+        for b in m["content"]
+        if isinstance(b, dict) and b.get("type") == "tool_result"
+    )
+    parsed = json.loads(block["content"])
+    assert parsed["is_stale"] in (True, False)

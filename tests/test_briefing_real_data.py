@@ -60,4 +60,4 @@ def test_the_brief_renders_for_eth(eth_bars):
     text = format_brief("ETHUSDT", "1h", eth_bars, pd.DataFrame())
     assert "ĐO ĐƯỢC" in text
     assert "QUY ƯỚC" in text
-    assert "95%" not in text
+    assert "không phải 95%" in text

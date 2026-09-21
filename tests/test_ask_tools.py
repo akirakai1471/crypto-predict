@@ -114,8 +114,13 @@ def test_track_record_with_predictions_but_none_scored_yet(tools, tmp_path):
 
 
 def test_every_tool_returns_json_serialisable_output(tools):
-    """Tool results go over the wire as JSON. A numpy float or a Timestamp here
-    would fail at the API boundary rather than in any test."""
+    """Tool results go over the wire as JSON, so a non-serialisable leaf would
+    fail at the API boundary rather than in any test.
+
+    Note numpy.float64 is a subclass of float and serialises fine, so it is not
+    what this catches. It catches numpy.int64, numpy.bool_, numpy.float32 and an
+    un-stringified pandas.Timestamp - all of which raise TypeError.
+    """
     import json
 
     payloads = [

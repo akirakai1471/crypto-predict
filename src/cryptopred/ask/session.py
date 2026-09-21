@@ -1,16 +1,24 @@
 """The Claude Opus 5 tool-calling loop.
 
 **Why a manual loop rather than the SDK's tool runner**, which its own docs
-recommend by default: the runner keeps its message history internally and does
-not expose it. This feature's binding honesty mechanism is an audit that traces
-every number in the answer back to a tool result, so the tool results are not
-incidental — they are the point. A loop that hides them would leave the audit
-with nothing to check.
+recommend by default: schema control. The tools here declare `strict: true`,
+`additionalProperties: false`, an enum-closed symbol, and a discriminated
+`target: {kind, value}` object — and the runner's documented path for client
+tools is the `@beta_tool` decorator, which derives its schema from the Python
+signature. Raw tool dicts are documented as accepted for *server* tools. The
+descriptions matter as much as the shapes: they carry the warnings the model
+reads before it reads any value.
 
-Two lesser reasons point the same way. The tool schemas here are hand-written
-because their Vietnamese descriptions carry the warnings the model reads before
-it reads any value, and `@beta_tool` derives schemas from Python signatures
-instead. And the runner is beta, while `messages.create` is not.
+An earlier version of this docstring led with a different reason — that the
+runner hides its message history, leaving the audit nothing to trace. Review
+found that overstated. The runner does keep its own history, but
+`generate_tool_call_response()` is a documented affordance that returns each
+round's tool results, and mirroring the history as the docs already demonstrate
+would have given the audit what it needs. The claim is corrected rather than
+quietly dropped, because this module exists to stop overstated claims reaching a
+reader and the standard applies to its own comments first.
+
+A third reason, minor: the runner is beta and `messages.create` is not.
 
 `client` is injectable, so every test in this layer runs with no network call
 and no spend.
@@ -18,6 +26,7 @@ and no spend.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,9 +41,11 @@ MODEL = "claude-opus-5"
 INPUT_PER_MTOK = 5.00
 OUTPUT_PER_MTOK = 25.00
 
-# A question needs a handful of tool calls. Well past that the model is looping,
-# and every extra round costs real money on a request the user cannot see.
-MAX_TOOL_ROUNDS = 12
+# Requests the model may make for one question. A question needs a handful of
+# tool calls; well past that the model is looping, and every extra round costs
+# real money on a request the user cannot see. Counted as requests rather than
+# tool rounds so the number means what its name says.
+MAX_REQUESTS = 13
 
 
 @dataclass
@@ -70,7 +81,7 @@ def answer_question(
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
 
     response = None
-    for _ in range(MAX_TOOL_ROUNDS + 1):
+    for _ in range(MAX_REQUESTS):
         response = client.messages.create(
             model=model,
             max_tokens=16000,
@@ -116,7 +127,9 @@ def answer_question(
                 {
                     "type": "tool_result",
                     "tool_use_id": call.id,
-                    "content": str(payload),
+                    # JSON, not str(): a Python repr sends True/False and single
+                    # quotes, and would render a stray nan/inf as a bare word.
+                    "content": json.dumps(payload, ensure_ascii=False, default=str),
                     "is_error": is_error,
                 }
             )
@@ -124,7 +137,7 @@ def answer_question(
     else:
         return AskResult(
             answer=(
-                f"Dừng lại sau {MAX_TOOL_ROUNDS} vòng gọi công cụ mà chưa có câu trả "
+                f"Dừng lại sau {MAX_REQUESTS} lượt gọi model mà chưa có câu trả "
                 "lời. Model đang lặp — hãy hỏi lại cụ thể hơn."
             ),
             audit=_empty_audit(),
@@ -136,6 +149,17 @@ def answer_question(
     text = "\n".join(
         b.text for b in response.content if getattr(b, "type", "") == "text"
     )
+    # The loop breaks on "no tool calls", which is true of every terminal stop
+    # reason — including the ones that mean the answer was cut off. Without this
+    # a truncated answer is returned looking complete, which is the same failure
+    # the SDK docs warn about for an unhandled pause_turn.
+    stop = getattr(response, "stop_reason", None)
+    if stop in ("max_tokens", "stop_sequence"):
+        text += (
+            f"\n\n[Câu trả lời bị cắt giữa chừng: stop_reason = {stop}. "
+            "Phần trên có thể thiếu.]"
+        )
+
     return AskResult(
         answer=text,
         audit=audit_answer(text, collect_tool_numbers(tool_payloads)),

@@ -78,3 +78,42 @@ def test_tool_numbers_are_collected_from_nested_payloads():
     assert 0.584 in found
     assert 2900.0 in found
     assert True not in found  # a bool is not a measurement
+
+
+def test_a_wrong_percentage_under_100_is_flagged_not_exempted():
+    """The critical hole review found: a stated 60% against a measured 58.4%
+    is wrong by more than the tolerance, and was slipping through the
+    small-integer exemption purely for want of a decimal point."""
+    report = audit_answer("xác suất là 60%.", tool_numbers=[0.584231])
+    assert report["ok"] is False
+    assert 60.0 in report["unmatched"]
+
+
+def test_a_correct_whole_percentage_still_matches():
+    """Tightening the exemption must not start flagging true statements."""
+    report = audit_answer("xác suất là 58%.", tool_numbers=[0.5812])
+    assert report["ok"] is True
+
+
+def test_a_percentage_written_with_a_space_is_treated_the_same():
+    assert audit_answer("60 % số lần", tool_numbers=[0.584231])["ok"] is False
+    assert audit_answer("31.2 % số lần", tool_numbers=[0.312])["ok"] is True
+
+
+def test_small_integers_that_are_not_percentages_stay_exempt():
+    report = audit_answer("trong 24 giờ, xem 3 mức", tool_numbers=[])
+    assert report["ok"] is True
+
+
+def test_a_date_is_not_treated_as_an_unsourced_claim():
+    """An audit that cries wolf on a true statement spends the credibility of
+    the one signal this feature rests on."""
+    assert audit_answer("Hôm nay là ngày 21/09/2026.", tool_numbers=[])["ok"] is True
+    assert audit_answer("nến đóng 2026-09-11 07:00", tool_numbers=[])["ok"] is True
+
+
+def test_a_price_beside_a_date_is_still_checked():
+    """Skipping dates must not create a shadow where a real figure can hide."""
+    report = audit_answer("Ngày 21/09/2026 giá về 2900.", tool_numbers=[])
+    assert report["ok"] is False
+    assert 2900.0 in report["unmatched"]

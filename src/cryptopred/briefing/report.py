@@ -14,7 +14,7 @@ import pandas as pd
 from cryptopred.briefing.indicators import current_indicators
 from cryptopred.briefing.levels import daily_pivots
 from cryptopred.briefing.snapshot import market_snapshot
-from cryptopred.briefing.touch import touch_probability
+from cryptopred.briefing.touch import MEASURED_COVERAGE, touch_probability
 
 # The drops a buyer actually asks about, and the horizons they wait.
 DEFAULT_TARGETS = (-0.03, -0.05, -0.10)
@@ -49,6 +49,8 @@ def format_brief(
         f"  dữ liệu cũ: {snap['data_age_hours']} giờ",
         "",
         "  xác suất chạm mức (đo từ lịch sử, không phải dự báo):",
+        f"  khoảng trong ngoặc có độ phủ ĐO ĐƯỢC ≈{MEASURED_COVERAGE:.0%}, "
+        "không phải 95% — xem docs/findings.md",
     ]
 
     for target in DEFAULT_TARGETS:

@@ -43,12 +43,20 @@ def test_wait_times_say_which_sample_they_came_from():
     assert "cùng chế độ" in text or "MỌI chế độ" in text
 
 
-def test_the_interval_is_never_presented_as_95_percent():
-    """The block bootstrap measures ~80% coverage. Printing "95%" next to it
-    would be the overclaim findings.md exists to record."""
+def test_the_interval_states_its_measured_coverage_and_disclaims_95():
+    """The block bootstrap measures ~80% coverage.
+
+    An earlier version of this test just asserted "95%" was absent, which review
+    called out as guarding only against a hardcoded label - it would have passed
+    on a table that said nothing at all about coverage, leaving a reader to
+    default to the 95% the measurement refuted. It now checks the real property:
+    the table says what the interval covers, and says it is not 95%.
+    """
     bars, now = _brief_input()
     text = format_brief("BTCUSDT", "1h", bars, pd.DataFrame(), now=now)
-    assert "95%" not in text
+    assert "độ phủ" in text
+    assert "80%" in text
+    assert "không phải 95%" in text
 
 
 def test_it_runs_on_an_empty_store_without_raising():
