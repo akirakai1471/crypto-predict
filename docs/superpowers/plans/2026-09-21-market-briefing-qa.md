@@ -1498,6 +1498,14 @@ def test_touch_probabilities_are_shown_with_their_sample_size():
     assert "n=" in text
 
 
+def test_wait_times_say_which_sample_they_came_from():
+    """Printed under a cell label, unconditional wait times would read as if
+    they belonged to that cell."""
+    bars, now = _brief_input()
+    text = format_brief("BTCUSDT", "1h", bars, pd.DataFrame(), now=now)
+    assert "cùng chế độ" in text or "MỌI chế độ" in text
+
+
 def test_it_runs_on_an_empty_store_without_raising():
     text = format_brief("BTCUSDT", "1h", pd.DataFrame(), pd.DataFrame())
     assert "Không có dữ liệu" in text
@@ -1577,8 +1585,17 @@ def format_brief(
     lines.append(f"    chế độ hiện tại: {sample['cell_label']}")
     wait = sample["wait_hours"]
     if wait:
+        # Name the sample the wait times came from. When the regime cell is too
+        # thin they come from every bar instead, and printing them directly under
+        # the cell label would attribute them to a regime they were not measured
+        # in - the exact misreading provenance.py exists to prevent.
+        scope = (
+            "cùng chế độ"
+            if sample["wait_source"] == "cell"
+            else "MỌI chế độ, không riêng chế độ trên"
+        )
         lines.append(
-            f"    thời gian chờ khi có chạm: trung vị {wait['median']:.0f}h, "
+            f"    thời gian chờ khi có chạm ({scope}): trung vị {wait['median']:.0f}h, "
             f"p90 {wait['p90']:.0f}h (n={wait['n']:,})"
         )
 
@@ -2093,6 +2110,9 @@ class BriefingTools:
             "conditional": result["conditional"].to_dict(),
             "unconditional": result["unconditional"].to_dict(),
             "wait_hours": result["wait_hours"],
+            # Which sample the wait times came from. Without this the model
+            # could attribute unconditional waits to the named regime.
+            "wait_source": result["wait_source"],
         }
 
     def model_signal(self, symbol: str) -> dict[str, Any]:
