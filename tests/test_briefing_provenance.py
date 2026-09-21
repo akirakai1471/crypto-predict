@@ -11,19 +11,19 @@ from cryptopred.briefing.provenance import Convention, Measured, Unavailable
 
 
 def test_measured_carries_its_sample_size():
-    m = Measured(value=0.584, n=2401, ci95=(0.569, 0.599), method="block bootstrap")
+    m = Measured(value=0.584, n=2401, interval=(0.569, 0.599), method="block bootstrap")
     assert m.to_dict() == {
         "source": "measured",
         "value": 0.584,
         "n": 2401,
-        "ci95": [0.569, 0.599],
+        "interval": [0.569, 0.599],
         "method": "block bootstrap",
     }
 
 
-def test_measured_defaults_ci95_to_none():
+def test_measured_defaults_the_interval_to_none():
     m = Measured(value=1.0, n=5)
-    assert m.to_dict()["ci95"] is None
+    assert m.to_dict()["interval"] is None
 
 
 def test_measured_rejects_non_positive_n():

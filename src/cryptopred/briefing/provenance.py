@@ -23,7 +23,11 @@ class Measured:
 
     value: float
     n: int
-    ci95: tuple[float, float] | None = None
+    # Deliberately not named `ci95`. Some of these intervals are Wilson on
+    # independent trials and really are 95%; others are block bootstraps whose
+    # measured coverage is nearer 80%. A field called `ci95` would state the
+    # stronger claim for both. `method` says which kind this one is.
+    interval: tuple[float, float] | None = None
     method: str = ""
 
     def __post_init__(self) -> None:
@@ -38,7 +42,7 @@ class Measured:
             "source": "measured",
             "value": self.value,
             "n": self.n,
-            "ci95": list(self.ci95) if self.ci95 is not None else None,
+            "interval": list(self.interval) if self.interval is not None else None,
             "method": self.method,
         }
 

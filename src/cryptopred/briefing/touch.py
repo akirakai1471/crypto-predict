@@ -181,7 +181,7 @@ def touch_probability(
     unconditional = Measured(
         value=float(touched.mean()),
         n=int(touched.size),
-        ci95=block_bootstrap_ci(touched, block=block, n_boot=n_boot),
+        interval=block_bootstrap_ci(touched, block=block, n_boot=n_boot),
         method=f"mọi nến lịch sử, bootstrap khối {block} nến ({coverage_note})",
     )
 
@@ -223,7 +223,7 @@ def touch_probability(
         conditional = Measured(
             value=float(cell_touched.mean()),
             n=int(cell_touched.size),
-            ci95=block_bootstrap_ci(cell_touched, block=block, n_boot=n_boot),
+            interval=block_bootstrap_ci(cell_touched, block=block, n_boot=n_boot),
             method=f"nến cùng chế độ '{cell.label}', bootstrap khối {block} nến ({coverage_note})",
         )
         wait_inputs = (cell_touched, cell_bars_to)
