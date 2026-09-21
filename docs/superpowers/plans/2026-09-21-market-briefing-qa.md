@@ -69,12 +69,12 @@ from cryptopred.briefing.provenance import Convention, Measured, Unavailable
 
 
 def test_measured_carries_its_sample_size():
-    m = Measured(value=0.584, n=2401, ci95=(0.569, 0.599), method="block bootstrap")
+    m = Measured(value=0.584, n=2401, interval=(0.569, 0.599), method="block bootstrap")
     assert m.to_dict() == {
         "source": "measured",
         "value": 0.584,
         "n": 2401,
-        "ci95": [0.569, 0.599],
+        "interval": [0.569, 0.599],
         "method": "block bootstrap",
     }
 
@@ -144,7 +144,7 @@ class Measured:
 
     value: float
     n: int
-    ci95: tuple[float, float] | None = None
+    interval: tuple[float, float] | None = None
     method: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -152,7 +152,7 @@ class Measured:
             "source": "measured",
             "value": self.value,
             "n": self.n,
-            "ci95": list(self.ci95) if self.ci95 is not None else None,
+            "interval": list(self.interval) if self.interval is not None else None,
             "method": self.method,
         }
 
@@ -764,7 +764,7 @@ def touch_probability(
     unconditional = Measured(
         value=float(touched.mean()),
         n=int(touched.size),
-        ci95=block_bootstrap_ci(touched, block=block, n_boot=n_boot),
+        interval=block_bootstrap_ci(touched, block=block, n_boot=n_boot),
         method=f"mọi nến lịch sử, bootstrap khối {block} nến",
     )
 
@@ -800,7 +800,7 @@ def touch_probability(
         conditional = Measured(
             value=float(cell_touched.mean()),
             n=int(cell_touched.size),
-            ci95=block_bootstrap_ci(cell_touched, block=block, n_boot=n_boot),
+            interval=block_bootstrap_ci(cell_touched, block=block, n_boot=n_boot),
             method=f"nến cùng chế độ '{cell.label}', bootstrap khối {block} nến",
         )
         wait_source = (cell_touched, cell_bars_to)
@@ -1630,7 +1630,7 @@ def _prob(payload) -> str:
     d = payload.to_dict() if hasattr(payload, "to_dict") else payload
     if d.get("source") != "measured":
         return "không đủ mẫu"
-    lo, hi = d["ci95"]
+    lo, hi = d["interval"]
     return f"{d['value']:.1%} n={d['n']:,} CI[{lo:.1%},{hi:.1%}]"
 ```
 
@@ -2173,7 +2173,7 @@ class BriefingTools:
             Measured(
                 value=correct / n,
                 n=n,
-                ci95=wilson_interval(correct, n),
+                interval=wilson_interval(correct, n),
                 method="mọi nến đã chấm điểm, Wilson (các lần thử độc lập)",
             )
             if n > 0
