@@ -75,3 +75,22 @@ def test_the_cell_is_named_so_the_answer_can_quote_it():
 
 def test_min_cell_bars_constant_is_five_hundred():
     assert MIN_CELL_BARS == 500
+
+
+def test_wait_source_names_where_the_wait_time_came_from():
+    """A thin cell falls back to the unconditional wait-time sample, but the
+    dict still carries the cell's label. Without an explicit flag a renderer
+    doing the obvious thing would misattribute unconditional wait times to a
+    named regime -- exactly the class of error provenance.py exists to catch.
+    """
+    bars = make_ohlcv(n=2600, seed=11)
+    thin = touch_probability(bars, target_pct=-0.03, horizon=24, min_cell_bars=10_000)
+    assert isinstance(thin["conditional"], Unavailable)
+    assert thin["wait_source"] == "unconditional"
+
+    healthy_bars = make_ohlcv(n=6000, seed=14)
+    healthy = touch_probability(
+        healthy_bars, target_pct=-0.03, horizon=24, min_cell_bars=100
+    )
+    assert isinstance(healthy["conditional"], Measured)
+    assert healthy["wait_source"] == "cell"
