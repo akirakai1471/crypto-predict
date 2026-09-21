@@ -1452,6 +1452,7 @@ EOF
 **Files:**
 - Create: `src/cryptopred/briefing/report.py`
 - Create: `src/cryptopred/briefing/cli.py`
+- Modify: `src/cryptopred/report_io.py` (extract `safe_echo`)
 - Modify: `pyproject.toml` (add the script entry)
 - Test: `tests/test_briefing_report.py`
 
@@ -1616,6 +1617,44 @@ def _prob(payload) -> str:
     return f"{d['value']:.1%} n={d['n']:,} CI[{lo:.1%},{hi:.1%}]"
 ```
 
+First, extract the console-encoding fallback that `report_io.emit` already
+carries so both callers share it. In `src/cryptopred/report_io.py`, replace the
+body of `emit`'s print section with a call to a new public function:
+
+```python
+def safe_echo(text: str) -> None:
+    """Print text that a Windows cp1252 console cannot represent.
+
+    The briefing is written in Vietnamese and a cp1252 console cannot encode it.
+    Two finished runs in this project were already destroyed by exactly this,
+    which is why `emit` writes its file before printing. `cryptopred-brief` has
+    no file to write, so it needs the fallback on its own.
+    """
+    try:
+        typer.echo(text)
+    except UnicodeEncodeError:
+        # ASCII rather than the console's declared encoding: the declared one is
+        # what just failed, and the point of a fallback is that it cannot fail.
+        typer.echo(text.encode("ascii", errors="replace").decode("ascii"))
+
+
+def emit(report: str, path: Path) -> None:
+    """Save `report` to `path`, then print it.
+
+    Saving first is the whole point: a print that fails must not be able to
+    destroy work that succeeded. The file is always UTF-8; only the console has
+    an encoding that depends on the machine.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report, encoding="utf-8")
+    safe_echo(report)
+    typer.echo(f"
+Saved to {path}")
+```
+
+The existing tests in `tests/test_report_io.py` must still pass unchanged — they
+pin `emit`'s behaviour, and this refactor must not alter it.
+
 Create `src/cryptopred/briefing/cli.py`:
 
 ```python
@@ -1630,6 +1669,7 @@ import typer
 from cryptopred.briefing.report import format_brief
 from cryptopred.config import load_config
 from cryptopred.ingest.storage import ParquetStore
+from cryptopred.report_io import safe_echo
 
 app = typer.Typer(help="Print the measured market briefing for a symbol.")
 
@@ -1644,7 +1684,8 @@ def show(
     parquet = ParquetStore(cfg.data.root / "raw")
     bars = parquet.read("klines", symbol, interval)
     funding = parquet.read("funding", symbol, "8h")
-    typer.echo(format_brief(symbol, interval, bars, funding))
+    # Vietnamese text through a Windows console: see safe_echo.
+    safe_echo(format_brief(symbol, interval, bars, funding))
 
 
 if __name__ == "__main__":
@@ -1670,7 +1711,7 @@ Expected: the table, with ETH's measured touch probabilities and a QUY ƯỚC se
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cryptopred/briefing/report.py src/cryptopred/briefing/cli.py pyproject.toml tests/test_briefing_report.py
+git add src/cryptopred/briefing/report.py src/cryptopred/briefing/cli.py src/cryptopred/report_io.py pyproject.toml tests/test_briefing_report.py
 git commit -m "$(cat <<'EOF'
 cryptopred-brief: the numbers without the model
 
