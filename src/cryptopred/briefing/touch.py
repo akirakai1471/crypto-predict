@@ -27,6 +27,12 @@ def touch_outcomes(
     A downward target is tested against `low` and an upward one against `high`:
     a level that was traded was touched, whatever the bar closed at. Testing
     closes instead is the easiest error to make here and it biases the answer.
+
+    A NaN in `low` or `high` never registers a touch, because every comparison
+    against NaN is False. That fails open rather than crashing, and the ingest
+    pipeline records gaps as missing rows rather than NaN-filled ones, so it
+    should not arise — but a silent undercount is the shape of error this
+    function is most able to hide, so it is written down.
     """
     if horizon < 1:
         raise ValueError("horizon must be at least 1 bar")
@@ -46,5 +52,8 @@ def touch_outcomes(
         windows <= targets[:, None] if target_pct < 0 else windows >= targets[:, None]
     )
     touched = hit.any(axis=1)
+    # argmax on a boolean row returns the FIRST True, which is what makes this
+    # the first touch rather than an arbitrary one. +1 because the window starts
+    # one bar ahead, so the next bar is 1 rather than 0.
     bars_to_touch = np.where(touched, hit.argmax(axis=1) + 1, 0)
     return touched, bars_to_touch
