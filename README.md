@@ -146,6 +146,40 @@ Xem đánh đổi theo ngưỡng (chỉ để hiểu, chọn ngưỡng từ bả
 uv run cryptopred-model sweep --symbol BTCUSDT --interval 1h
 ```
 
+## Hỏi "khi nào giá về mức X?"
+
+Câu hỏi này trả lời được bằng số đo, không cần bói. Bảng số liệu chạy **không
+cần API key nào**:
+
+```bash
+uv run cryptopred-brief ETHUSDT
+```
+
+Nó chia đôi rõ ràng. Mục **ĐO ĐƯỢC** là thống kê thật trên 59.523 nến ETH: trong
+những giờ có cùng chế độ biến động và xu hướng, giá đã chạm −3% trong 72h bao
+nhiêu phần trăm số lần, kèm cỡ mẫu và khoảng tin cậy, kèm phân phối thời gian
+chờ. Mục **QUY ƯỚC — CHƯA KIỂM CHỨNG** là RSI/MACD/pivot: có mặt vì bạn sẽ hỏi
+tới, chứ dự án này chưa đo chúng có giá trị dự báo hay không.
+
+Hai lưu ý đã dán sẵn trong output, đọc trước khi tin số:
+
+- Khoảng tin cậy có **độ phủ đo được ≈80%, không phải 95%** — xem mục tương ứng
+  trong `docs/findings.md` để biết đo thế nào.
+- Nếu dữ liệu cũ, dòng đầu tiên nói rõ cũ bao nhiêu giờ.
+
+Hỏi tự do bằng tiếng Việt thì cần key Anthropic (`ant auth login` hoặc
+`ANTHROPIC_API_KEY`). Khoảng $0,03–0,06 một câu, và lệnh in chi phí sau mỗi lần:
+
+```bash
+uv run cryptopred-ask "khi nào ETH rớt về 2300?"
+```
+
+Mọi con số trong câu trả lời đều bị đối chiếu ngược lại kết quả tool. Số nào
+không truy được nguồn sẽ bị in ra kèm dòng "đừng tin những con số này".
+
+Chỉ trả lời về BTCUSDT và ETHUSDT — 18 coin còn lại không tự cập nhật nên dữ
+liệu sẽ cũ.
+
 Chạy dashboard tại http://127.0.0.1:8077:
 
 ```bash
