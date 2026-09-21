@@ -20,6 +20,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Only the question-answering layer needs this. briefing/ must keep working
+# for anyone who never installs it.
+ask = [
+    "anthropic>=1.0",
+]
 dev = [
     "pytest>=8.2",
     "pytest-cov>=5.0",
