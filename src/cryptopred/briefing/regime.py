@@ -59,7 +59,14 @@ def expanding_tercile(series: pd.Series, min_history: int) -> pd.Series:
 def classify_regimes(
     bars: pd.DataFrame, min_history: int = MIN_HISTORY_BARS
 ) -> pd.DataFrame:
-    """Per-bar volatility and trend buckets. NaN where history is too thin."""
+    """Per-bar volatility and trend buckets. NaN where history is too thin.
+
+    `min_history` counts non-null observations, so each column also waits out its
+    own indicator warm-up first: volatility becomes valid around
+    `min_history + 14` bars and trend around `min_history + 168`. At the default
+    that is roughly a week's difference between the two columns, and callers that
+    need both — every caller here does — are gated by the slower one.
+    """
     vol = atr(bars, 14) / bars["close"]
     trend = bars["close"] / ewma(bars["close"], 168) - 1.0
     return pd.DataFrame(
