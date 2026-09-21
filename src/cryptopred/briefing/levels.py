@@ -46,6 +46,18 @@ def daily_pivots(bars: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def _forward(series: pd.Series, k: int, how: str) -> pd.Series:
+    """`max`/`min` of the next k bars, defined at every bar that has k ahead.
+
+    Reversed so pandas counts its rows from the end of the series, where they
+    exist. Still NaN for the final k bars, which is the point: those have no
+    forward window and so cannot hold a confirmed swing.
+    """
+    reversed_ = series.iloc[::-1]
+    rolled = getattr(reversed_.rolling(k, min_periods=k), how)()
+    return rolled.iloc[::-1].shift(-1)
+
+
 def swing_levels(
     bars: pd.DataFrame, k: int = 5, lookback: int = 720
 ) -> dict[str, list[dict[str, Any]]]:
@@ -68,12 +80,22 @@ def swing_levels(
     high, low = window["high"], window["low"]
     reading = f"đỉnh/đáy xoay, xác nhận bằng {k} nến hai bên"
 
-    # shift(-k).rolling(k) at i covers bars i+1 .. i+k; shift(1).rolling(k)
-    # covers i-k .. i-1. Bar i itself is in neither.
+    # Bar i itself is in neither neighbourhood.
+    #
+    # The left side is a plain backward window: shift(1).rolling(k) at i covers
+    # i-k .. i-1, and is correctly NaN for the first k bars.
+    #
+    # The right side has to be built by reversing. The obvious
+    # `shift(-k).rolling(k)` is wrong at the start of the series: pandas counts
+    # ROWS, not available data, so at i < k-1 it returns NaN even though bars
+    # i+1 .. i+k all exist. That silently hides any swing in the oldest k-1 bars
+    # of the window — verified: a spike at position 2 with k=5 went undetected
+    # while the same spike at position 20 was found. Reversing counts rows from
+    # the other end, where they are there.
     left_high = high.shift(1).rolling(k, min_periods=k).max()
-    right_high = high.shift(-k).rolling(k, min_periods=k).max()
     left_low = low.shift(1).rolling(k, min_periods=k).min()
-    right_low = low.shift(-k).rolling(k, min_periods=k).min()
+    right_high = _forward(high, k, "max")
+    right_low = _forward(low, k, "min")
 
     is_high = (high > left_high) & (high > right_high)
     is_low = (low < left_low) & (low < right_low)

@@ -5,6 +5,8 @@ positive". The first half is a fact and the second is an inference this project
 has never tested.
 """
 
+import pandas as pd
+
 from cryptopred.briefing.indicators import current_indicators
 from tests.conftest import make_ohlcv
 
@@ -56,3 +58,26 @@ def test_the_value_reported_is_the_final_bars_not_the_last_one_available():
     """
     assert "atr_percentile" not in current_indicators(make_ohlcv(n=700, seed=35))
     assert "atr_percentile" in current_indicators(make_ohlcv(n=800, seed=35))
+
+
+def test_now_reads_the_final_bar_and_does_not_fall_back_to_an_older_one():
+    """The case that distinguishes `_now` from a dropna-based `_last`.
+
+    Review showed the boundary tests above pass either way: at 700 bars nothing
+    is valid anywhere and at 800 the final bar is valid, so the two agree. They
+    diverge only when a series warmed up earlier and its final value is NaN —
+    precisely when reporting the older one would answer a question about a
+    different bar without saying so. Pinned on the helper directly, because
+    inducing that state through an indicator is hard: pandas' ewm skips NaN
+    inputs and keeps producing values.
+    """
+    import numpy as np
+
+    from cryptopred.briefing.indicators import _now
+
+    warmed_then_missing = pd.Series([1.0, 2.0, 3.0, np.nan])
+    assert _now(warmed_then_missing) is None
+
+    assert _now(pd.Series([1.0, 2.0, 3.0])) == 3.0
+    assert _now(pd.Series([np.nan, np.nan])) is None
+    assert _now(pd.Series(dtype=float)) is None

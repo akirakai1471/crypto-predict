@@ -74,3 +74,57 @@ def test_swing_levels_carry_the_same_warning_as_every_other_convention():
             assert level["source"] == "convention"
             assert level["validated"] is False
             assert "warning" in level
+
+
+def test_the_forward_window_covers_the_next_k_bars_at_every_index():
+    """pandas rolling counts rows, not available data.
+
+    `shift(-k).rolling(k)` returns NaN for the first k-1 bars even though their
+    forward windows are fully in-bounds. Today the left-hand condition already
+    excludes those bars, so the defect changes no output — but the expression
+    is wrong, and a future change to the left condition would expose it. This
+    pins the helper directly rather than through behaviour it cannot yet affect.
+    """
+    from cryptopred.briefing.levels import _forward
+
+    series = pd.Series(np.arange(20.0))
+    k = 5
+    expected = [
+        series.iloc[i + 1 : i + 1 + k].max() if i + k < len(series) else np.nan
+        for i in range(len(series))
+    ]
+    got = _forward(series, k, "max")
+    for i, want in enumerate(expected):
+        if np.isnan(want):
+            assert pd.isna(got.iloc[i]), i
+        else:
+            assert got.iloc[i] == want, i
+
+
+def test_the_final_k_bars_have_no_forward_window():
+    """The reversal must not accidentally confirm bars that have no future."""
+    n = 40
+    high = np.full(n, 100.0)
+    high[n - 2] = 130.0  # inside the unconfirmable tail
+    idx = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC", name="open_time")
+    close = np.full(n, 100.0)
+    bars = pd.DataFrame(
+        {"open": close, "high": high, "low": close, "close": close}, index=idx
+    )
+    out = swing_levels(bars, k=5, lookback=40)
+    assert 130.0 not in [lvl["value"] for lvl in out["resistance"]]
+
+
+def test_a_swing_needs_k_bars_on_both_sides():
+    """A spike in the first k bars is not a k-swing: it has no left
+    neighbourhood. Excluding it is correct, not a boundary bug."""
+    n = 40
+    high = np.full(n, 100.0)
+    high[2] = 130.0
+    idx = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC", name="open_time")
+    close = np.full(n, 100.0)
+    bars = pd.DataFrame(
+        {"open": close, "high": high, "low": close, "close": close}, index=idx
+    )
+    out = swing_levels(bars, k=5, lookback=40)
+    assert 130.0 not in [lvl["value"] for lvl in out["resistance"]]

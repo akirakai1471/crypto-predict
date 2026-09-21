@@ -58,3 +58,11 @@ def test_funding_present_is_measured_with_its_sample():
 
 def test_stale_threshold_is_three_hours():
     assert STALE_AFTER_HOURS == 3.0
+
+
+def test_a_store_without_a_volume_column_reports_unavailable_not_zero():
+    """Summing a missing column gives 0.0, which is indistinguishable from a
+    day on which nothing traded."""
+    bars = make_ohlcv(n=1000, seed=26).drop(columns=["quote_volume"])
+    snap = market_snapshot(bars, funding=pd.DataFrame(), now=bars["close_time"].max())
+    assert snap["quote_volume_24h"]["source"] == "unavailable"
