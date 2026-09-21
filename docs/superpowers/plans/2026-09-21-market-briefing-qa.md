@@ -1778,6 +1778,30 @@ def test_model_signal_for_a_symbol_with_no_model_explains_why(tools):
     out = tools.model_signal(symbol="ETHUSDT")
     assert out["source"] == "unavailable"
     assert "model" in out["reason"].lower()
+
+
+def test_track_record_with_an_empty_log_is_unavailable(tools):
+    out = tools.track_record(symbol="BTCUSDT")
+    assert out["source"] == "unavailable"
+
+
+def test_track_record_with_predictions_but_none_scored_yet(tools, tmp_path):
+    """0 correct out of 0 is 0.0, which reads as a measured failure rather than
+    as no measurement. `Measured` rejects n <= 0 to stop exactly this, so this
+    path must produce an Unavailable accuracy rather than raising."""
+    import pandas as pd
+
+    from cryptopred.serve.store import PredictionStore
+
+    store = PredictionStore(tmp_path / "predictions.db")
+    store.record_prediction(
+        symbol="BTCUSDT", interval="1h",
+        bar_close_time=pd.Timestamp("2024-02-01", tz="UTC"),
+        proba=(0.2, 0.3, 0.5), signal=0, close_price=42000.0, model_version="v1",
+    )
+    out = tools.track_record(symbol="BTCUSDT")
+    assert out["n_scored"] == 0
+    assert out["accuracy"]["source"] == "unavailable"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -2080,14 +2104,25 @@ class BriefingTools:
         correct = int(scored["is_correct"].sum()) if not scored.empty else 0
         n = int(len(scored))
         cost = self.cfg.strategy.taker_fee * 2 + self.cfg.strategy.slippage * 2
-        return {
-            "n_scored": n,
-            "accuracy": Measured(
-                value=(correct / n if n else 0.0),
+
+        # An accuracy computed from zero scored bars is 0.0, which reads as a
+        # measured failure rather than as no measurement. `Measured` rejects
+        # n <= 0 for exactly this reason.
+        accuracy: Measured | Unavailable = (
+            Measured(
+                value=correct / n,
                 n=n,
                 ci95=wilson_interval(correct, n),
                 method="mọi nến đã chấm điểm, Wilson (các lần thử độc lập)",
-            ).to_dict(),
+            )
+            if n > 0
+            else Unavailable(
+                reason="chưa có nến nào được chấm điểm, nên chưa có độ chính xác nào"
+            )
+        )
+        return {
+            "n_scored": n,
+            "accuracy": accuracy.to_dict(),
             "round_trip_cost": cost,
             "note": (
                 "Độ chính xác hoà vốn phụ thuộc biên độ di chuyển trung vị; "
