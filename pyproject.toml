@@ -33,6 +33,7 @@ cryptopred-model = "cryptopred.models.cli:app"
 cryptopred-serve = "cryptopred.serve.cli:app"
 cryptopred-paper = "cryptopred.paper.cli:app"
 cryptopred-meta = "cryptopred.models.meta_cli:app"
+cryptopred-brief = "cryptopred.briefing.cli:app"
 
 [build-system]
 requires = ["hatchling"]

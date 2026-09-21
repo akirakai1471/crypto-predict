@@ -15,6 +15,22 @@ from pathlib import Path
 import typer
 
 
+def safe_echo(text: str) -> None:
+    """Print text a Windows cp1252 console cannot represent.
+
+    The briefing is written entirely in Vietnamese, so this is not a corner
+    case for it — redirecting `cryptopred-brief` to a file would die on the
+    first accented character. `emit` has a file to fall back on; the brief does
+    not, so the fallback lives here where both can reach it.
+    """
+    try:
+        typer.echo(text)
+    except UnicodeEncodeError:
+        # ASCII rather than the console's declared encoding: the declared one is
+        # what just failed, and the point of a fallback is that it cannot fail.
+        typer.echo(text.encode("ascii", errors="replace").decode("ascii"))
+
+
 def emit(report: str, path: Path) -> None:
     """Save `report` to `path`, then print it.
 
@@ -24,13 +40,5 @@ def emit(report: str, path: Path) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(report, encoding="utf-8")
-
-    try:
-        typer.echo(report)
-    except UnicodeEncodeError:
-        # A console that cannot show an em-dash is not a reason to show nothing.
-        # ASCII rather than the console's declared encoding: the declared one is
-        # what just failed, and the point of a fallback is that it cannot fail.
-        typer.echo(report.encode("ascii", errors="replace").decode("ascii"))
-
+    safe_echo(report)
     typer.echo(f"\nSaved to {path}")
