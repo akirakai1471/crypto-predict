@@ -136,6 +136,79 @@ This does not change the project's conclusion. The edge remains unproven; see
 "Twenty symbols, one frozen configuration". It changes which model is deployed
 and makes the live experiment able to record anything at all.
 
+## A gate that read the wrong verdict, and twelve days that went badly
+
+Date: 2026-09-23. Two findings from one day, and the second is the more
+uncomfortable.
+
+### The save gate never asked whether the strategy made money
+
+Retraining on data through 2026-09-23 put **ETHUSDT into the registry** at
+−0.24% after costs, −30.5% maximum drawdown, and −20.7% at doubled costs. Its
+own report printed `STRATEGY VERDICT: NO-GO` on the line above, and it was saved
+anyway.
+
+The gate read only the classification verdict — *does the model beat its
+baselines?* — which ETH passes. The strategy verdict — *does that knowledge
+survive fees?* — was computed for the report and never consulted. A model this
+project had spent weeks correctly refusing walked in through a gate that was
+asking the wrong question.
+
+This is the fourth defect of the same shape recorded in this document:
+
+| gate | what it measured | what it should have measured |
+|---|---|---|
+| coverage check | the model's own training rows | data the model had not seen |
+| two-sided check | blocked ONE-SIDED, passed UNPROVEN | anything that is not TWO-SIDED |
+| meta comparison | return at unequal exposure | return at matched exposure |
+| **save gate** | **does it beat baselines** | **that, and does it survive fees** |
+
+The recurring lesson is not "check more things". It is that **a gate must be
+asked what it would reject**, not whether the current candidate passes. Every one
+of these was written by someone who believed it worked, and every one was caught
+by running a case it should have refused.
+
+Both verdicts are now required, both failures are listed when either blocks, and
+both are stored in the model metadata. The ETH model was deleted; ETHUSDT has no
+model again, which is the correct output of its gates.
+
+### The deployed model had a bad twelve days
+
+The scheduler had been down since 2026-09-11. Backfilling to 2026-09-23 added
+282 scored bars and the drift monitor fired immediately:
+
+> `Signal rate: DRIFTED — fires on 3.9% of the last 284 bars against a 8% target`
+
+The monitor was built on 2026-09-11 for exactly this, and it is worth recording
+that it worked: the previous time a model went out of tune, it took **sixteen
+days** to notice. This time the data had been back for minutes.
+
+Accuracy over the new stretch, against the one baseline that matters:
+
+| | accuracy | n | 95% CI |
+|---|---|---|---|
+| before 2026-09-11 | 50.7% | 383 | [45.7%, 55.6%] |
+| **2026-09-11 to 09-23** | **41.0%** | 268 | [35.3%, 47.0%] |
+
+The true labels over that stretch were UP 55.6%, DOWN 28.7%, FLAT 15.7%. So
+**guessing "always UP" would have scored 55.6%** and the model scored 41.0%,
+with the top of its interval still well below the naive baseline. It predicted
+DOWN on 39.9% of bars in a market that rose.
+
+**Four reasons not to over-read it**, all of which cut the same way — this is
+suggestive, not settled. It is three-class accuracy over *every* bar, not the 8%
+the strategy would actually trade, and the strategy traded almost none of them.
+268 bars is twelve days and one regime. The rows are backfilled, so the model
+used no future data but cannot prove it was written first. And the 55.6%
+baseline is high *because this period rose* — the same long-bias trap this
+document records elsewhere, now pointing the other way.
+
+What is not ambiguous is the direction: drift and accuracy agreed, and both said
+the model was out of tune with the present regime. BTCUSDT was retrained and
+passed both gates (+50.1% after costs, −16.6% drawdown, +18.4% at doubled
+costs, coverage 4.90% against an 8% target — still firing light, in the same
+direction as the drift).
+
 ## The touch-probability interval covers 80%, not 95%
 
 Date: 2026-09-11 work, measured 2026-09-21. Recorded here because it is a
