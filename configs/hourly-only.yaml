@@ -1,0 +1,12 @@
+# The 1h slice of the default config.
+#
+# `cryptopred-dataset build` builds for every configured interval, and the 1m
+# interval holds 3.7 million bars per symbol - a build that runs for hours. The
+# live model and the briefing layer are both 1h only, so routine maintenance
+# has no reason to touch 1m.
+data:
+  symbols:
+    - BTCUSDT
+    - ETHUSDT
+  intervals:
+    - 1h
