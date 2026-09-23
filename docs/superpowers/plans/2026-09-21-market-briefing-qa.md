@@ -69,12 +69,12 @@ from cryptopred.briefing.provenance import Convention, Measured, Unavailable
 
 
 def test_measured_carries_its_sample_size():
-    m = Measured(value=0.584, n=2401, ci95=(0.569, 0.599), method="block bootstrap")
+    m = Measured(value=0.584, n=2401, interval=(0.569, 0.599), method="block bootstrap")
     assert m.to_dict() == {
         "source": "measured",
         "value": 0.584,
         "n": 2401,
-        "ci95": [0.569, 0.599],
+        "interval": [0.569, 0.599],
         "method": "block bootstrap",
     }
 
@@ -144,7 +144,7 @@ class Measured:
 
     value: float
     n: int
-    ci95: tuple[float, float] | None = None
+    interval: tuple[float, float] | None = None
     method: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -152,7 +152,7 @@ class Measured:
             "source": "measured",
             "value": self.value,
             "n": self.n,
-            "ci95": list(self.ci95) if self.ci95 is not None else None,
+            "interval": list(self.interval) if self.interval is not None else None,
             "method": self.method,
         }
 
@@ -764,7 +764,7 @@ def touch_probability(
     unconditional = Measured(
         value=float(touched.mean()),
         n=int(touched.size),
-        ci95=block_bootstrap_ci(touched, block=block, n_boot=n_boot),
+        interval=block_bootstrap_ci(touched, block=block, n_boot=n_boot),
         method=f"mọi nến lịch sử, bootstrap khối {block} nến",
     )
 
@@ -800,7 +800,7 @@ def touch_probability(
         conditional = Measured(
             value=float(cell_touched.mean()),
             n=int(cell_touched.size),
-            ci95=block_bootstrap_ci(cell_touched, block=block, n_boot=n_boot),
+            interval=block_bootstrap_ci(cell_touched, block=block, n_boot=n_boot),
             method=f"nến cùng chế độ '{cell.label}', bootstrap khối {block} nến",
         )
         wait_source = (cell_touched, cell_bars_to)
@@ -1452,6 +1452,7 @@ EOF
 **Files:**
 - Create: `src/cryptopred/briefing/report.py`
 - Create: `src/cryptopred/briefing/cli.py`
+- Modify: `src/cryptopred/report_io.py` (extract `safe_echo`)
 - Modify: `pyproject.toml` (add the script entry)
 - Test: `tests/test_briefing_report.py`
 
@@ -1495,6 +1496,14 @@ def test_touch_probabilities_are_shown_with_their_sample_size():
     bars, now = _brief_input()
     text = format_brief("BTCUSDT", "1h", bars, pd.DataFrame(), now=now)
     assert "n=" in text
+
+
+def test_wait_times_say_which_sample_they_came_from():
+    """Printed under a cell label, unconditional wait times would read as if
+    they belonged to that cell."""
+    bars, now = _brief_input()
+    text = format_brief("BTCUSDT", "1h", bars, pd.DataFrame(), now=now)
+    assert "cùng chế độ" in text or "MỌI chế độ" in text
 
 
 def test_it_runs_on_an_empty_store_without_raising():
@@ -1576,8 +1585,17 @@ def format_brief(
     lines.append(f"    chế độ hiện tại: {sample['cell_label']}")
     wait = sample["wait_hours"]
     if wait:
+        # Name the sample the wait times came from. When the regime cell is too
+        # thin they come from every bar instead, and printing them directly under
+        # the cell label would attribute them to a regime they were not measured
+        # in - the exact misreading provenance.py exists to prevent.
+        scope = (
+            "cùng chế độ"
+            if sample["wait_source"] == "cell"
+            else "MỌI chế độ, không riêng chế độ trên"
+        )
         lines.append(
-            f"    thời gian chờ khi có chạm: trung vị {wait['median']:.0f}h, "
+            f"    thời gian chờ khi có chạm ({scope}): trung vị {wait['median']:.0f}h, "
             f"p90 {wait['p90']:.0f}h (n={wait['n']:,})"
         )
 
@@ -1612,9 +1630,47 @@ def _prob(payload) -> str:
     d = payload.to_dict() if hasattr(payload, "to_dict") else payload
     if d.get("source") != "measured":
         return "không đủ mẫu"
-    lo, hi = d["ci95"]
+    lo, hi = d["interval"]
     return f"{d['value']:.1%} n={d['n']:,} CI[{lo:.1%},{hi:.1%}]"
 ```
+
+First, extract the console-encoding fallback that `report_io.emit` already
+carries so both callers share it. In `src/cryptopred/report_io.py`, replace the
+body of `emit`'s print section with a call to a new public function:
+
+```python
+def safe_echo(text: str) -> None:
+    """Print text that a Windows cp1252 console cannot represent.
+
+    The briefing is written in Vietnamese and a cp1252 console cannot encode it.
+    Two finished runs in this project were already destroyed by exactly this,
+    which is why `emit` writes its file before printing. `cryptopred-brief` has
+    no file to write, so it needs the fallback on its own.
+    """
+    try:
+        typer.echo(text)
+    except UnicodeEncodeError:
+        # ASCII rather than the console's declared encoding: the declared one is
+        # what just failed, and the point of a fallback is that it cannot fail.
+        typer.echo(text.encode("ascii", errors="replace").decode("ascii"))
+
+
+def emit(report: str, path: Path) -> None:
+    """Save `report` to `path`, then print it.
+
+    Saving first is the whole point: a print that fails must not be able to
+    destroy work that succeeded. The file is always UTF-8; only the console has
+    an encoding that depends on the machine.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report, encoding="utf-8")
+    safe_echo(report)
+    typer.echo(f"
+Saved to {path}")
+```
+
+The existing tests in `tests/test_report_io.py` must still pass unchanged — they
+pin `emit`'s behaviour, and this refactor must not alter it.
 
 Create `src/cryptopred/briefing/cli.py`:
 
@@ -1630,6 +1686,7 @@ import typer
 from cryptopred.briefing.report import format_brief
 from cryptopred.config import load_config
 from cryptopred.ingest.storage import ParquetStore
+from cryptopred.report_io import safe_echo
 
 app = typer.Typer(help="Print the measured market briefing for a symbol.")
 
@@ -1644,7 +1701,8 @@ def show(
     parquet = ParquetStore(cfg.data.root / "raw")
     bars = parquet.read("klines", symbol, interval)
     funding = parquet.read("funding", symbol, "8h")
-    typer.echo(format_brief(symbol, interval, bars, funding))
+    # Vietnamese text through a Windows console: see safe_echo.
+    safe_echo(format_brief(symbol, interval, bars, funding))
 
 
 if __name__ == "__main__":
@@ -1670,7 +1728,7 @@ Expected: the table, with ETH's measured touch probabilities and a QUY ƯỚC se
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cryptopred/briefing/report.py src/cryptopred/briefing/cli.py pyproject.toml tests/test_briefing_report.py
+git add src/cryptopred/briefing/report.py src/cryptopred/briefing/cli.py src/cryptopred/report_io.py pyproject.toml tests/test_briefing_report.py
 git commit -m "$(cat <<'EOF'
 cryptopred-brief: the numbers without the model
 
@@ -1778,6 +1836,30 @@ def test_model_signal_for_a_symbol_with_no_model_explains_why(tools):
     out = tools.model_signal(symbol="ETHUSDT")
     assert out["source"] == "unavailable"
     assert "model" in out["reason"].lower()
+
+
+def test_track_record_with_an_empty_log_is_unavailable(tools):
+    out = tools.track_record(symbol="BTCUSDT")
+    assert out["source"] == "unavailable"
+
+
+def test_track_record_with_predictions_but_none_scored_yet(tools, tmp_path):
+    """0 correct out of 0 is 0.0, which reads as a measured failure rather than
+    as no measurement. `Measured` rejects n <= 0 to stop exactly this, so this
+    path must produce an Unavailable accuracy rather than raising."""
+    import pandas as pd
+
+    from cryptopred.serve.store import PredictionStore
+
+    store = PredictionStore(tmp_path / "predictions.db")
+    store.record_prediction(
+        symbol="BTCUSDT", interval="1h",
+        bar_close_time=pd.Timestamp("2024-02-01", tz="UTC"),
+        proba=(0.2, 0.3, 0.5), signal=0, close_price=42000.0, model_version="v1",
+    )
+    out = tools.track_record(symbol="BTCUSDT")
+    assert out["n_scored"] == 0
+    assert out["accuracy"]["source"] == "unavailable"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -2028,6 +2110,9 @@ class BriefingTools:
             "conditional": result["conditional"].to_dict(),
             "unconditional": result["unconditional"].to_dict(),
             "wait_hours": result["wait_hours"],
+            # Which sample the wait times came from. Without this the model
+            # could attribute unconditional waits to the named regime.
+            "wait_source": result["wait_source"],
         }
 
     def model_signal(self, symbol: str) -> dict[str, Any]:
@@ -2080,14 +2165,25 @@ class BriefingTools:
         correct = int(scored["is_correct"].sum()) if not scored.empty else 0
         n = int(len(scored))
         cost = self.cfg.strategy.taker_fee * 2 + self.cfg.strategy.slippage * 2
+
+        # An accuracy computed from zero scored bars is 0.0, which reads as a
+        # measured failure rather than as no measurement. `Measured` rejects
+        # n <= 0 for exactly this reason.
+        accuracy: Measured | Unavailable = (
+            Measured(
+                value=correct / n,
+                n=n,
+                interval=wilson_interval(correct, n),
+                method="mọi nến đã chấm điểm, Wilson (các lần thử độc lập)",
+            )
+            if n > 0
+            else Unavailable(
+                reason="chưa có nến nào được chấm điểm, nên chưa có độ chính xác nào"
+            )
+        )
         return {
             "n_scored": n,
-            "accuracy": Measured(
-                value=(correct / n if n else 0.0),
-                n=n,
-                ci95=wilson_interval(correct, n),
-                method="mọi nến đã chấm điểm, Wilson (các lần thử độc lập)",
-            ).to_dict(),
+            "accuracy": accuracy.to_dict(),
             "round_trip_cost": cost,
             "note": (
                 "Độ chính xác hoà vốn phụ thuộc biên độ di chuyển trung vị; "

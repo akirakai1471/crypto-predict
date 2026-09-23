@@ -136,6 +136,62 @@ This does not change the project's conclusion. The edge remains unproven; see
 "Twenty symbols, one frozen configuration". It changes which model is deployed
 and makes the live experiment able to record anything at all.
 
+## The touch-probability interval covers 80%, not 95%
+
+Date: 2026-09-11 work, measured 2026-09-21. Recorded here because it is a
+property of a number this project reports, and because the honest version is
+less flattering than the label would have been.
+
+`briefing/touch.py` reports how often price reached a level within a horizon.
+The obvious interval for a proportion is Wilson, which this project already uses
+correctly in `serve/status.py` — but that is for scored signals, which are
+independent trials. Touch outcomes are not: bar *t* and bar *t+1* look forward
+over windows sharing `horizon − 1` of their `horizon` bars, so at a 72-hour
+horizon consecutive observations overlap 98.6%.
+
+A moving-block bootstrap resamples contiguous blocks so that dependence survives
+resampling. It is a large improvement. It is not a 95% interval.
+
+**Measured coverage.** A two-state Markov chain with a known long-run rate of
+0.4 and a mean run length of 50, 800 realisations, checking how often the true
+value falls inside the interval:
+
+| block | coverage at n=3,000 | coverage at n=500 |
+|---|---|---|
+| 1 | 22.9% | — |
+| 24 | 75.2% | 73.1% |
+| 48 | 85.0% | 79.5% |
+| 72 | 88.6% | 79.6% |
+| 200 | 91.1% | — |
+
+Wilson on the same data covers 24.7%. `block=1` covers 22.9%, which is the
+sanity check: with no blocking the bootstrap should behave like the naive
+interval, and it does.
+
+**Three things follow, and two of them are unflattering.**
+
+The block length now defaults to `max(2 × horizon, 48)` rather than
+`max(horizon, 24)`. A block equal to the dependence length under-covers; the
+sweep above is why, and the change lifts a 24-hour query from 75.2% to 85.0%.
+
+Switching to a *circular* block bootstrap — wrapping block starts modulo n so
+edge positions are drawn as often as interior ones — was tried against the
+review's prediction that it would help. Measured on identical draws it gains
+0.3–1.0pp at n=3,000 and 3–4pp at n=500. Real, in the predicted direction, and
+nowhere near enough to reach 95%. It was kept because it is free and correct,
+not because it solved the problem.
+
+**The interval is therefore labelled with what it delivers.** `MEASURED_COVERAGE
+= 0.80` — the worst case actually measured, at `MIN_CELL_BARS` scale — is
+appended to the `method` string that reaches the user: *"bootstrap khối 48 nến
+(độ phủ đo được ≈80%, không phải 95%)"*. The `Measured` field that holds it is
+named `interval`, not `ci95`, because the same field also holds genuine Wilson
+95% intervals elsewhere and a name claiming 95% for both would be the quiet kind
+of overstatement this document exists to record.
+
+Closing the remaining gap — studentized or bias-corrected bootstrap — was not
+attempted. It is open work, not a solved problem.
+
 ## Headline
 
 The model has **real predictive signal**. Whether that signal is a **tradeable
