@@ -215,6 +215,27 @@ Xem kết quả bất cứ lúc nào: nhấp đúp `status.bat`, hoặc
 uv run cryptopred-serve status
 ```
 
+**Bảo trì định kỳ — nhấp đúp `check-model.bat`.** Nó nạp nến mới, dựng lại
+dataset, in trạng thái live, rồi đánh giá xem model train trên dữ liệu hôm nay
+sẽ ra sao. Nó **không** truyền `--save`, nên registry không đổi và thí nghiệm
+live vẫn đang đo đúng model nó vẫn đo.
+
+Việc đó là cố ý. Ngày 23/09/2026 một lần train lại đã đưa vào registry một model
+lỗ 0.24% sau phí, trong khi báo cáo của chính nó in `STRATEGY VERDICT: NO-GO` ở
+dòng ngay trên. Cổng kiểm lúc đó sai, nhưng cổng chỉ có giá trị khi **có người
+đọc** — một tác vụ tự train định kỳ đảm bảo không ai đọc. Thêm hai lý do: train
+lại mỗi khi kết quả xấu là overfit theo chế độ vừa qua, và mỗi lần thay model là
+reset thứ mà thí nghiệm live đang đo.
+
+Đổi model thật thì chạy tay và **đọc output trước khi tin**:
+
+```bash
+uv run cryptopred-model train --symbol BTCUSDT --interval 1h --save
+```
+
+Phải thấy **cả hai** dòng VERDICT nói GO — một cho phân loại (model có biết gì
+không), một cho chiến lược (có sống nổi qua phí không).
+
 **Tắt máy thì sao?**
 
 | | |
