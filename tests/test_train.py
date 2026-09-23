@@ -228,3 +228,33 @@ def test_coverage_check_catches_a_cutoff_set_on_the_models_own_training_rows():
         f"in-sample cutoff {cutoff:.4f} produced {check['actual_coverage']:.2%} "
         "out of sample and the check let it through"
     )
+
+
+def test_the_save_gate_reads_both_verdicts():
+    """The classification verdict asks whether the model knows anything; the
+    strategy verdict asks whether that knowledge survives fees.
+
+    Gating on only the first let ETHUSDT into the registry at -0.24% after
+    costs and negative at doubled costs - a model this project had spent weeks
+    correctly refusing.
+    """
+    from cryptopred.backtest.runner import strategy_verdict
+
+    losing = {
+        "base": type("R", (), {"summary": {"total_return": -0.0024, "max_drawdown": -0.305}})(),
+        "doubled_costs": type("R", (), {"summary": {"total_return": -0.207}})(),
+        "frictionless": type("R", (), {"summary": {"total_return": 0.317}})(),
+        "survives_doubled_costs": False,
+        "cost_drag": 0.32,
+    }
+    assert strategy_verdict(losing)["decision"] != "GO"
+
+    # And the gate's own expression, which is what actually runs.
+    classification = {"decision": "GO", "reason": "beats baselines"}
+    strategy = strategy_verdict(losing)
+    failures = [
+        f"{name} verdict is {v['decision']}"
+        for name, v in (("classification", classification), ("strategy", strategy))
+        if v["decision"] != "GO"
+    ]
+    assert failures, "a NO-GO strategy verdict must block the save"

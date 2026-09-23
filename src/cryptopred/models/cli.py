@@ -13,7 +13,11 @@ import typer
 from cryptopred.backtest.breakeven import analyse, format_table, round_trip_cost
 from cryptopred.backtest.engine import CostModel
 from cryptopred.backtest.execution_report import compare_execution, format_execution_comparison
-from cryptopred.backtest.runner import format_backtest, run_strategy_backtest
+from cryptopred.backtest.runner import (
+    format_backtest,
+    run_strategy_backtest,
+    strategy_verdict,
+)
 from cryptopred.backtest.sizing_report import (
     compare_sizing,
     compare_sizing_matched,
@@ -99,6 +103,7 @@ def train(
     # The classification report says whether the model knows anything. The
     # backtest says whether that knowledge survives contact with fees.
     bars = ParquetStore(cfg.data.root / "raw").read("klines", symbol, interval)
+    bt = None
     if not bars.empty:
         test_index = dataset.index[-evaluation["n_test_total"] :]
         # Score the rule that gets deployed, not the withdrawn threshold. The
@@ -135,10 +140,27 @@ def train(
     if not save:
         return
 
-    if decision["decision"] != "GO" and not override:
+    # Both verdicts, not just the first. They answer different questions: the
+    # classification verdict asks whether the model knows anything, the strategy
+    # verdict asks whether that knowledge survives fees. Gating on only the
+    # first let ETHUSDT into the registry at -0.24% after costs, -30.5%
+    # drawdown, and negative at doubled costs — a model this project had spent
+    # weeks correctly refusing.
+    strategy = (
+        strategy_verdict(bt) if bt is not None else {"decision": "GO", "reason": ""}
+    )
+    failures = [
+        f"{name} verdict is {v['decision']}: {v['reason']}"
+        for name, v in (("classification", decision), ("strategy", strategy))
+        if v["decision"] != "GO"
+    ]
+    if failures and not override:
+        typer.echo("\nRefusing to save:")
+        for failure in failures:
+            typer.echo(f"  - {failure}")
         typer.echo(
-            f"\nRefusing to save: verdict is {decision['decision']}. "
-            "A model that has not beaten its baselines does not belong in the registry.\n"
+            "A model that has not beaten its baselines, or that does not survive "
+            "costs, does not belong in the registry.\n"
             "If you have a reason to save it anyway, pass --override with a written "
             "justification; it is recorded in the model's metadata and shown on the "
             "dashboard, permanently."
@@ -207,13 +229,15 @@ def train(
     registry = ModelRegistry(cfg.data.root / "models")
     metrics = dict(evaluation["model"])
     metrics["gate_decision"] = decision["decision"]
+    metrics["strategy_decision"] = strategy["decision"]
+    metrics["strategy_reason"] = strategy["reason"]
     metrics["margin_cutoff"] = cutoff
     metrics["signal_coverage"] = cfg.strategy.signal_coverage
     metrics["gate_reason"] = decision["reason"]
     # Only record an override that was actually needed. Marking a model that
     # passed its gate as overridden would put a permanent warning on the
     # dashboard for a model that earned its place.
-    override_used = bool(override) and decision["decision"] != "GO"
+    override_used = bool(override) and bool(failures)
     if override_used:
         metrics["override_reason"] = override
 
