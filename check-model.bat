@@ -2,6 +2,10 @@
 setlocal
 REM Evaluates the current model against fresh data and writes a report.
 REM
+REM Pass /quiet when running from Task Scheduler: it skips the trailing pause,
+REM which would otherwise leave the task hanging on a keypress nobody is there
+REM to give, forever, with the scheduler reporting it as still running.
+REM
 REM It does NOT pass --save, so nothing in the registry changes and the live
 REM experiment keeps measuring the model it has been measuring. The point is to
 REM be told the model has gone stale, not to have it quietly replaced.
@@ -15,13 +19,19 @@ REM Still no exchange account. No API key, no order-placement path anywhere.
 
 cd /d "%~dp0"
 
+REM One flag, checked at every exit. A pause left in an error path is worse
+REM than one on the happy path: the task hangs precisely when something has
+REM gone wrong and nobody is watching.
+set "INTERACTIVE=1"
+if /i "%~1"=="/quiet" set "INTERACTIVE="
+
 if not exist ".venv\Scripts\python.exe" (
     echo.
     echo ERROR: .venv\Scripts\python.exe not found. Create the environment first:
     echo     uv venv --python 3.12
     echo     uv pip install -e ".[dev]"
     echo.
-    pause
+    if defined INTERACTIVE pause
     exit /b 1
 )
 
@@ -61,4 +71,5 @@ echo  Replacing it resets what the live log is measuring, so the rows
 echo  collected against the old model stop being comparable.
 echo ============================================================
 echo.
-pause
+
+if defined INTERACTIVE pause

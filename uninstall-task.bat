@@ -5,12 +5,14 @@ REM processes. Safe to run even if the tasks were never created.
 
 set TASK_SCHED=cryptopred scheduler
 set TASK_DASH=cryptopred dashboard
+set TASK_CHECK=cryptopred model check
 
 echo Stopping and removing the scheduled tasks...
 schtasks /End    /TN "%TASK_SCHED%" >nul 2>&1
 schtasks /End    /TN "%TASK_DASH%"  >nul 2>&1
 schtasks /Delete /TN "%TASK_SCHED%" /F >nul 2>&1
 schtasks /Delete /TN "%TASK_DASH%"  /F >nul 2>&1
+schtasks /Delete /TN "%TASK_CHECK%" /F >nul 2>&1
 
 REM /End stops the task, but a process it already spawned can outlive it.
 echo Stopping any process still running...

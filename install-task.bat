@@ -18,6 +18,7 @@ cd /d "%~dp0"
 
 set TASK_SCHED=cryptopred scheduler
 set TASK_DASH=cryptopred dashboard
+set TASK_CHECK=cryptopred model check
 
 if not exist ".venv\Scripts\pythonw.exe" (
     echo.
@@ -42,9 +43,15 @@ if errorlevel 1 (
 )
 
 echo.
-echo This will create two scheduled tasks that run at logon:
+echo This will create two tasks that run at logon:
 echo   "%TASK_SCHED%"  - fetches each closed bar, predicts, scores, paper-trades
 echo   "%TASK_DASH%"   - serves http://127.0.0.1:8077
+echo.
+echo And one that runs monthly, on the 1st at 09:00:
+echo   "%TASK_CHECK%"  - evaluates the model against fresh data and writes
+echo                    a report. It does NOT pass --save, so nothing in the
+echo                    registry changes and the live experiment keeps
+echo                    measuring the model it has been measuring.
 echo.
 echo Remove them later with uninstall-task.bat.
 echo.
@@ -64,8 +71,20 @@ schtasks /Create /TN "%TASK_DASH%" /SC ONLOGON /RL LIMITED /F ^
   /TR "\"%CD%\.venv\Scripts\pythonw.exe\" -m uvicorn cryptopred.serve.api:app --host 127.0.0.1 --port 8077"
 if errorlevel 1 goto failed
 
+REM Monthly, not at logon. Evaluation takes ~25 minutes of CPU, and running it
+REM every time the machine boots would spend that for nothing - the answer
+REM barely moves in a day.
+REM
+REM It evaluates and reports. It does not save. A gate is only worth having if
+REM somebody reads its output, and on 2026-09-23 an unread gate put a model into
+REM the registry at -0.24%% after costs with its own report printing STRATEGY
+REM VERDICT: NO-GO one line above. See docs/findings.md.
+schtasks /Create /TN "%TASK_CHECK%" /SC MONTHLY /D 1 /ST 09:00 /RL LIMITED /F ^
+  /TR "\"%CD%\check-model.bat\" /quiet"
+if errorlevel 1 goto failed
+
 echo.
-echo Created. Starting both now so you do not have to log out first...
+echo Created. Starting the two logon tasks now so you do not have to log out first...
 schtasks /Run /TN "%TASK_SCHED%" >nul
 schtasks /Run /TN "%TASK_DASH%" >nul
 timeout /t 10 /nobreak >nul
@@ -81,14 +100,17 @@ echo A task that runs at logon still stops when the machine is off. Bars missed
 echo while it was off are refilled and flagged as backfilled, so the gap stays
 echo visible rather than silently filling in.
 echo.
+echo The monthly check was NOT started now - it runs on the 1st. To see what it
+echo would say, double-click check-model.bat yourself any time.
+echo.
 pause
 exit /b 0
 
 :failed
 echo.
 echo ERROR: schtasks failed. The usual cause is that the account is not allowed
-echo to create scheduled tasks. Nothing partial was left behind if only the
-echo first task was created - run uninstall-task.bat to clear it.
+echo to create scheduled tasks. If some tasks were created before the failure,
+echo run uninstall-task.bat to clear whatever landed.
 echo.
 pause
 exit /b 1
