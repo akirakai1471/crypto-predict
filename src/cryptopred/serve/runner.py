@@ -16,6 +16,7 @@ from cryptopred.ingest.cli import run_klines_ingest
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.paper.trader import PaperTrader
 from cryptopred.serve import heartbeat
+from cryptopred.serve.alerts import format_alert, notify, should_alert
 from cryptopred.serve.gapfill import fill_gaps
 from cryptopred.serve.predictor import Predictor
 from cryptopred.serve.scoring import score_pending
@@ -42,6 +43,7 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
         "bars": 0, "predictions": 0, "scored": 0, "opened": 0, "closed": 0,
         "filled": 0, "chased": 0, "cancelled": 0, "pending": 0,
         "backfilled": 0,
+        "alerts": 0,
     }
 
     sync_cfg = cfg.model_copy(deep=True)
@@ -80,6 +82,22 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
                 bars = parquet.read("klines", symbol, interval)
                 entry_time = bars.index.max()
                 last_close = float(bars["close"].iloc[-1])
+
+                # The history is read BEFORE this signal is considered, so a
+                # signal never suppresses itself, and the record quoted in the
+                # alert is the record as of before this bet.
+                if prediction.signal != 0:
+                    counts["alerts"] += _maybe_alert(
+                        cfg=cfg,
+                        symbol=symbol,
+                        interval=interval,
+                        prediction=prediction,
+                        close_price=last_close,
+                        horizon=horizon,
+                        predictions=predictions,
+                        trader=trader,
+                        predictor=predictor,
+                    )
 
                 if execution is None:
                     if trader.open_from_signal(
@@ -126,3 +144,50 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
     # Written last: a heartbeat should mean the cycle finished, not that it began.
     heartbeat.write(cfg.data.root / "heartbeat.json", interval, counts)
     return counts
+
+
+def _maybe_alert(
+    cfg: Config,
+    symbol: str,
+    interval: str,
+    prediction,
+    close_price: float,
+    horizon: int,
+    predictions: PredictionStore,
+    trader: PaperTrader,
+    predictor: Predictor,
+) -> int:
+    """Alert on a signal that starts a new episode. Returns 1 if it alerted.
+
+    Wrapped so that nothing here can break the cycle. A failed notification
+    should cost the user a message, not the bar's prediction and the paper trade
+    that followed it.
+    """
+    try:
+        history = predictions.history(symbol, interval, limit=100_000)
+        if not should_alert(
+            signal=prediction.signal,
+            bar_close_time=pd.Timestamp(prediction.bar_close_time),
+            history=history,
+            horizon_hours=horizon,
+        ):
+            return 0
+
+        meta = predictor.bundle.metadata
+        message = format_alert(
+            symbol=symbol,
+            signal=prediction.signal,
+            bar_close_time=pd.Timestamp(prediction.bar_close_time),
+            close_price=close_price,
+            margin=abs(prediction.proba[2] - prediction.proba[0]),
+            cutoff=float(meta.get("margin_cutoff") or 0.0),
+            history=history,
+            paper_equity=float(trader.summary(symbol)["equity"]),
+            starting_capital=float(cfg.strategy.starting_capital),
+        )
+        notify(message, log_path=cfg.data.root / "signals.log")
+        logger.info("%s %s: alerted on a %+d signal", symbol, interval, prediction.signal)
+        return 1
+    except Exception:  # noqa: BLE001 - a missed alert must not cost the cycle
+        logger.exception("%s %s: could not send the signal alert", symbol, interval)
+        return 0

@@ -14,6 +14,10 @@ messages in eight hours would describe one bet as though it were eight.
 
 from __future__ import annotations
 
+import contextlib
+import subprocess
+from pathlib import Path
+
 import pandas as pd
 
 # Below this many scored signals a hit rate is noise. Matches serve/status.py.
@@ -116,3 +120,79 @@ def format_alert(
             "trước là không kết luận được. Xem docs/findings.md.",
         ]
     )
+
+
+# Windows truncates balloon text well before this, but the cap keeps the popup
+# readable rather than a wall. The log always holds the whole message.
+BALLOON_TEXT_LIMIT = 200
+
+# PowerShell + NotifyIcon rather than a WinRT toast: the WinRT type accelerator
+# fails to load in a plain `powershell -NoProfile` session on this machine, and
+# NotifyIcon is .NET Framework, present on every Windows install, and needs no
+# registered AppID.
+_POPUP = """
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$i = New-Object System.Windows.Forms.NotifyIcon
+$i.Icon = [System.Drawing.SystemIcons]::Information
+$i.BalloonTipTitle = {title}
+$i.BalloonTipText = {text}
+$i.Visible = $true
+$i.ShowBalloonTip(10000)
+Start-Sleep -Seconds 11
+$i.Dispose()
+"""
+
+
+def balloon_parts(message: str) -> tuple[str, str]:
+    """Split a full alert into a balloon title and a short body.
+
+    The first line is the headline; the record line is what a glance needs. The
+    rest - the caveat, the margin - stays in the log, which is why the log is
+    written first and unconditionally.
+    """
+    lines = [ln for ln in message.splitlines() if ln.strip()]
+    title = lines[0] if lines else "cryptopred"
+    record = next((ln for ln in lines[1:] if ln.startswith("Hồ sơ")), "")
+    body = record or (lines[1] if len(lines) > 1 else "")
+    if len(body) > BALLOON_TEXT_LIMIT:
+        body = body[: BALLOON_TEXT_LIMIT - 1].rstrip() + "…"
+    return title, body
+
+
+def _ps_quote(value: str) -> str:
+    """A PowerShell single-quoted string. Doubling the quote is the escape."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def notify(message: str, log_path: Path, popup: bool = True) -> None:
+    """Append the alert to the log, then try to show it.
+
+    The log comes first and without a try/except, because it is the durable
+    record. The popup is a courtesy and any failure of it is swallowed: a
+    machine with no window station, a locked session, a missing PowerShell -
+    none of those are reasons to lose the alert or to break the scheduler cycle
+    that produced it.
+    """
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC")
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"\n===== {stamp} =====\n{message}\n")
+
+    if not popup:
+        return
+
+    title, body = balloon_parts(message)
+    script = _POPUP.format(title=_ps_quote(title), text=_ps_quote(body))
+    # A machine with no window station, a locked session, a missing PowerShell -
+    # none of those are reasons to lose the alert or break the cycle that made
+    # it. The log above already holds the message.
+    with contextlib.suppress(Exception):
+        # Detached and not waited on: the balloon lives for eleven seconds and
+        # the scheduler cycle has no reason to sit through it.
+        subprocess.Popen(  # noqa: S603
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )

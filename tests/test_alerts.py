@@ -207,3 +207,77 @@ def test_a_zero_signal_is_not_an_alert():
             close_price=1.0, margin=0.0, cutoff=0.06, history=_history([]),
             paper_equity=10000.0, starting_capital=10000.0,
         )
+
+
+# -- delivery -----------------------------------------------------------------
+
+
+def test_the_log_is_written_even_when_the_popup_fails(tmp_path, monkeypatch):
+    """The log is the durable record; the popup is a courtesy.
+
+    Same principle as report_io.emit: a display that fails must not be able to
+    destroy the thing that succeeded.
+    """
+    from cryptopred.serve import alerts
+
+    def boom(*_a, **_k):
+        raise OSError("no window station")
+
+    monkeypatch.setattr(alerts.subprocess, "Popen", boom)
+    log = tmp_path / "signals.log"
+    alerts.notify("BTCUSDT — model bắn LONG\nHồ sơ: đúng 7/15", log_path=log)
+    assert "LONG" in log.read_text(encoding="utf-8")
+
+
+def test_the_log_appends_rather_than_overwrites(tmp_path, monkeypatch):
+    from cryptopred.serve import alerts
+
+    monkeypatch.setattr(alerts.subprocess, "Popen", lambda *a, **k: None)
+    log = tmp_path / "signals.log"
+    alerts.notify("first", log_path=log)
+    alerts.notify("second", log_path=log)
+    text = log.read_text(encoding="utf-8")
+    assert "first" in text and "second" in text
+
+
+def test_the_log_records_when_each_alert_was_written(tmp_path, monkeypatch):
+    from cryptopred.serve import alerts
+
+    monkeypatch.setattr(alerts.subprocess, "Popen", lambda *a, **k: None)
+    log = tmp_path / "signals.log"
+    alerts.notify("x", log_path=log)
+    assert "UTC" in log.read_text(encoding="utf-8")
+
+
+def test_the_popup_summary_fits_a_balloon_tip():
+    """Windows truncates balloon text, so the popup gets a summary and the log
+    keeps the full message."""
+    from cryptopred.serve.alerts import BALLOON_TEXT_LIMIT, balloon_parts
+
+    long_message = "\n".join(
+        [
+            "BTCUSDT — model bắn LONG",
+            "nến đóng 2026-09-26 09:59 UTC, giá 84,560.60",
+            "margin 0.0631 so với cutoff 0.0600",
+            "",
+            "Hồ sơ: đúng 7/15 (47%). Vốn ảo 9,971 (-29). CHƯA ĐỦ ĐỂ KẾT LUẬN — "
+            "15 tín hiệu; cần khoảng 100.",
+            "",
+            "Đây là báo model đã bắn gì, KHÔNG phải khuyến nghị. " * 3,
+        ]
+    )
+    title, text = balloon_parts(long_message)
+    assert title == "BTCUSDT — model bắn LONG"
+    assert len(text) <= BALLOON_TEXT_LIMIT
+    assert "7/15" in text
+
+
+def test_the_popup_never_swallows_the_unproven_caveat_silently(tmp_path, monkeypatch):
+    """Truncating for the balloon must not lose the caveat from the log."""
+    from cryptopred.serve import alerts
+
+    monkeypatch.setattr(alerts.subprocess, "Popen", lambda *a, **k: None)
+    log = tmp_path / "signals.log"
+    message = "BTCUSDT — LONG\nHồ sơ: 7/15\n\nCHƯA CHỨNG MINH ĐƯỢC"
+    alerts.notify(message, log_path=log)
+    assert "CHƯA CHỨNG MINH" in log.read_text(encoding="utf-8")
