@@ -215,6 +215,35 @@ Xem kết quả bất cứ lúc nào: nhấp đúp `status.bat`, hoặc
 uv run cryptopred-serve status
 ```
 
+**Báo khi model bắn tín hiệu.** Scheduler đẩy thông báo Windows và ghi vào
+`data/signals.log` mỗi khi model bắn một tín hiệu **mở đầu một đợt mới**. Mỗi
+thông báo mang theo hồ sơ thành tích thật:
+
+```
+BTCUSDT — model bắn LONG
+nến đóng 2026-09-26 06:00 UTC, giá 84,560.60
+margin 0.0631 so với cutoff 0.0600
+
+Hồ sơ: đúng 7/15 (47%). Vốn ảo 9,971 (-29). CHƯA ĐỦ ĐỂ KẾT LUẬN — 15 tín hiệu;
+cần khoảng 100.
+
+Đây là báo model đã bắn gì, KHÔNG phải khuyến nghị. Khả năng sinh lời của hệ này
+CHƯA CHỨNG MINH ĐƯỢC: 6/20 coin qua cổng kiểm...
+```
+
+Hai điều cố ý:
+
+- **Không nói "mua"/"bán".** Nó báo model đã bắn gì, bạn tự quyết. Có test chặn
+  mọi câu mệnh lệnh xuất hiện trong thông báo.
+- **Không báo từng tín hiệu.** Horizon 24h nghĩa là model bắn mỗi nến khi điều
+  kiện còn giữ — log thật cho thấy 8 tín hiệu trong 8 giờ ngày 20/09 và 3 trong
+  4 giờ ngày 23/09, tức **3 đợt mang 15 mặt**. Tín hiệu cùng chiều trong vòng
+  horizon bị gộp; tín hiệu **đổi chiều** thì luôn báo, vì đổi chiều là thông tin
+  mới.
+
+Đổi code alert thì phải **khởi động lại scheduler** mới nhận — tiến trình đang
+chạy giữ bản code lúc nó khởi động.
+
 **Bảo trì định kỳ — nhấp đúp `check-model.bat`.** Nó nạp nến mới, dựng lại
 dataset, in trạng thái live, rồi đánh giá xem model train trên dữ liệu hôm nay
 sẽ ra sao. Nó **không** truyền `--save`, nên registry không đổi và thí nghiệm
