@@ -74,6 +74,10 @@ under the broken selection rule. Their *relative* conclusions may hold, since
 both arms used the same signals, but their absolute figures do not and they have
 not been re-run.
 
+*Both were re-run on 2026-09-11 under the rank rule; the quoted re-run notes
+inside "Limit orders" and "Position sizing by probability" below have the
+results.*
+
 ### Why this was missed for so long
 
 Every gate in the project checked whether the *strategy* was sound. Nothing

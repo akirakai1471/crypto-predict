@@ -99,9 +99,11 @@ Nhưng **chưa chứng minh được đây là edge giao dịch**:
 - Cấu hình 24h của BTC bền qua phí gấp đôi, nhưng ETH thất bại ở mọi ngưỡng.
 - Đã xét 28 cấu hình, 1 cái đạt. Đó xấp xỉ tỉ lệ may rủi thuần tuý.
 
-Model BTC đang phục vụ được lưu **dưới chế độ ghi đè cổng kiểm** — nó thua
-baseline tần suất nền trên Brier score toàn cục. Lý do ghi đè được ghi vĩnh viễn
-vào metadata và hiện trên dashboard.
+Model BTC đang phục vụ (train lại ngày 23/09/2026) qua **cả hai** cổng kiểm —
+phân loại và chiến lược — không cần ghi đè. Qua cổng không có nghĩa là có edge:
+cổng chỉ loại model chắc chắn không sống nổi qua phí. Nếu một model nào đó từng
+được lưu dưới chế độ ghi đè, lý do được ghi vĩnh viễn vào metadata và hiện trên
+dashboard.
 
 ## Cài đặt
 
@@ -200,7 +202,9 @@ uv run cryptopred-serve schedule
 Nhấp đúp `run.bat` — mở 2 cửa sổ (scheduler + dashboard) và bật trình duyệt.
 Đóng cửa sổ nào là dừng phần đó.
 
-**Cách biết chắc nó đang chạy:** nhấp đúp `status.bat`. Dòng đầu tiên là
+**Cách biết chắc nó đang chạy:** nhìn góc trên dashboard — chấm đầu tiên là
+scheduler (xanh = đang chạy, đỏ = đã dừng hoặc chưa từng chạy), chấm thứ hai là
+độ tươi của dữ liệu. Hoặc nhấp đúp `status.bat`. Dòng đầu tiên là
 
 ```
 Scheduler: RUNNING — last cycle 12 minutes ago
@@ -244,8 +248,17 @@ Hai điều cố ý:
   horizon bị gộp; tín hiệu **đổi chiều** thì luôn báo, vì đổi chiều là thông tin
   mới.
 
+Năm thông báo gần nhất hiện trên dashboard ở mục **Thông báo gần đây**, nguyên
+văn như lúc gửi — balloon Windows chỉ sống 11 giây.
+
 Đổi code alert thì phải **khởi động lại scheduler** mới nhận — tiến trình đang
 chạy giữ bản code lúc nó khởi động.
+
+**Trước bản sửa ngày 30/09/2026, thông báo không bao giờ bật.** Scheduler ghi dự
+đoán vào log rồi mới hỏi có nên báo không, nên tín hiệu luôn thấy chính nó là
+"tín hiệu cùng chiều trong horizon" và tự chặn. Nếu `data/signals.log` không có
+thông báo nào do scheduler gửi kể từ 26/09, lý do là vậy, không phải model im
+lặng. Chạy lại `run.bat` để scheduler nạp bản đã sửa.
 
 **Bảo trì định kỳ — nhấp đúp `check-model.bat`.** Nó nạp nến mới, dựng lại
 dataset, in trạng thái live, rồi đánh giá xem model train trên dữ liệu hôm nay
@@ -311,7 +324,8 @@ có khớp ~63% không, việc chấm điểm có chạy không.
 uv run pytest
 ```
 
-204 test, chạy hoàn toàn offline. Quan trọng nhất là `tests/test_leakage.py`:
+598 test, chạy hoàn toàn offline (5 test cần kho dữ liệu thật sẽ tự bỏ qua nếu
+chưa tải). Quan trọng nhất là `tests/test_leakage.py`:
 6 test chặn rò rỉ dữ liệu tương lai. **Nếu bộ này đỏ, mọi con số trong dự án đều
 vô nghĩa** — sửa rò rỉ trước, đừng train.
 
@@ -467,8 +481,14 @@ Và nó **không tạo ra edge từ hư không**: trên ETH mọi biến thể m
 nhuận nhưng vẫn **một chiều**. Phí rẻ làm cược một chiều rẻ hơn, không biến nó
 thành dự đoán.
 
-**Chưa áp dụng thật:** paper trader hiện đặt lệnh market. Chuyển sang maker là
-sửa đường thực thi, không phải đổi config.
+**Đã áp dụng:** paper trader đặt lệnh limit thật từ 26/08/2026 — xem mục "Paper
+trader đặt lệnh limit thật" ở trên.
+
+**Bảng trên đo dưới quy tắc ngưỡng 0.60 đã rút lại.** Chạy lại ngày 11/09/2026
+theo quy tắc thứ hạng (BTC 24h, top 8%): lợi thế lợi nhuận của maker (khớp khắt
+khe) còn **+2.4pp** (+56.9% so với +54.5%), nằm trong nhiễu của một backtest.
+Lý do thật để giữ maker là **đệm phí gấp đôi: +40.6% so với +22.2%** — đến từ số
+học phí, không từ giả định khớp lệnh. Chi tiết trong `docs/findings.md`.
 
 ## Cỡ lệnh theo xác suất: cũng không ăn thua, và biết rõ vì sao
 
