@@ -31,8 +31,11 @@ from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.experiment import (
     ARMS,
     PREREGISTERED_SYMBOLS,
+    SELECTION_ARMS,
     format_experiment,
+    format_selection_experiment,
     run_arm_symbol,
+    run_selection_symbol,
 )
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.models.report import format_evaluation, verdict
@@ -667,6 +670,49 @@ def experiment(
     emit(
         format_experiment(by_arm),
         cfg.data.root / "reports" / f"experiment_{interval}_{stamp}.txt",
+    )
+
+
+@app.command("selection-experiment")
+def selection_experiment(
+    symbols: str = typer.Option(
+        None, help="Comma-separated symbols. Defaults to the twenty pre-registered ones."
+    ),
+    interval: str = typer.Option("1h", help="Bar interval."),
+    jobs: int = typer.Option(
+        0, help="Symbols to train at once; 0 uses every core. Results match --jobs 1."
+    ),
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+) -> None:
+    """Run docs/preregistration-cost-aware-selection.md.
+
+    Each symbol is trained once, and its out-of-sample probabilities are used to
+    pick trades two ways: by directional margin, and by margin times recent
+    volatility. The verdict is the document's four-part rule, applied as written.
+    """
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    cfg = load_config(config)
+    symbol_list = (
+        [s.strip() for s in symbols.split(",")] if symbols else list(PREREGISTERED_SYMBOLS)
+    )
+    frozen = FrozenConfig()
+    workers, threads = parallel.plan(jobs, len(symbol_list))
+    typer.echo(f"  {len(symbol_list)} symbols, {workers} at a time ...")
+
+    def progress(i: int, result: dict[str, SymbolResult]) -> None:
+        typer.echo(f"  {symbol_list[i]}: {result['margin'].status}")
+
+    per_symbol = parallel.run(
+        run_selection_symbol,
+        [(sym, cfg, interval, frozen, threads) for sym in symbol_list],
+        workers,
+        on_done=progress,
+    )
+    by_arm = {arm: [r[arm] for r in per_symbol] for arm in SELECTION_ARMS}
+    stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
+    emit(
+        format_selection_experiment(by_arm),
+        cfg.data.root / "reports" / f"selection_experiment_{interval}_{stamp}.txt",
     )
 
 

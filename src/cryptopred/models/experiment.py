@@ -23,7 +23,12 @@ from cryptopred.config import Config
 from cryptopred.dataset.builder import build_dataset
 from cryptopred.features.context import context_symbol
 from cryptopred.ingest.storage import ParquetStore
-from cryptopred.models.validation import FrozenConfig, SymbolResult, evaluate_symbol
+from cryptopred.models.validation import (
+    FrozenConfig,
+    SymbolResult,
+    evaluate_symbol,
+    evaluate_symbol_selection,
+)
 
 # The twenty from docs/preregistration-multisymbol.md, unchanged.
 PREREGISTERED_SYMBOLS = (
@@ -219,6 +224,144 @@ def format_experiment(results: dict[str, list[SymbolResult]]) -> str:
         "Twenty crypto symbols over one period are not twenty independent tests; the",
         "p-value is optimistic. An ADOPTED arm earns a place in the default config, not",
         "a proven edge. Record this result in docs/findings.md either way.",
+        "=" * width,
+    ]
+    return "\n".join(lines)
+
+
+# -- cost-aware selection -------------------------------------------------------
+# docs/preregistration-cost-aware-selection.md: one arm, so the full alpha.
+
+SELECTION_WIN_SHARE = 0.75
+SELECTION_ALPHA = 0.05
+SELECTION_ARMS = ("margin", "margin_x_vol")
+
+
+def run_selection_symbol(
+    symbol: str,
+    cfg: Config,
+    interval: str,
+    config: FrozenConfig,
+    threads: int = 0,
+) -> dict[str, SymbolResult]:
+    """Train one symbol once and select its trades both ways."""
+    parquet = ParquetStore(cfg.data.root / "raw")
+    bars = parquet.read("klines", symbol, interval)
+    if bars.empty:
+        skipped = SymbolResult(symbol, status="skipped: no bars stored")
+        return dict.fromkeys(SELECTION_ARMS, skipped)
+
+    funding = parquet.read("funding", symbol, "8h")
+    dataset = build_dataset(
+        bars,
+        interval=interval,
+        horizon=config.horizon,
+        atr_period=cfg.labels.atr_period,
+        band_k=cfg.labels.band_k,
+        funding=funding if not funding.empty else None,
+        symbol=symbol,
+        feature_config=cfg.features,
+    )
+    return evaluate_symbol_selection(symbol, dataset, bars, config, threads=threads)
+
+
+def judge_selection(baseline: list[SymbolResult], arm: list[SymbolResult]) -> dict[str, Any]:
+    """The four-part rule, applied as written. Lists are aligned by symbol."""
+    pairs = [
+        (b, a)
+        for b, a in zip(baseline, arm, strict=True)
+        if b.status == "tested" and a.status == "tested"
+    ]
+    n = len(pairs)
+    wins = sum(
+        a.detail["doubled_cost_return"] > b.detail["doubled_cost_return"] for b, a in pairs
+    )
+    needed = math.ceil(SELECTION_WIN_SHARE * n)
+    p_value = sign_test_p(wins, n)
+
+    sharpe_base = float(np.mean([b.detail["sharpe"] for b, _ in pairs])) if n else 0.0
+    sharpe_arm = float(np.mean([a.detail["sharpe"] for _, a in pairs])) if n else 0.0
+    gates_base = sum(b.passed for b, _ in pairs)
+    gates_arm = sum(a.passed for _, a in pairs)
+    two_base = sum(b.detail["two_sided"] == "TWO-SIDED" for b, _ in pairs)
+    two_arm = sum(a.detail["two_sided"] == "TWO-SIDED" for _, a in pairs)
+
+    criteria = {
+        "costs": n > 0 and wins >= needed and p_value <= SELECTION_ALPHA,
+        "sharpe": n > 0 and sharpe_arm >= sharpe_base,
+        "gates": gates_arm >= gates_base,
+        "two_sided": two_arm >= two_base,
+    }
+    return {
+        "n": n,
+        "wins": wins,
+        "needed": needed,
+        "p_value": p_value,
+        "sharpe_base": sharpe_base,
+        "sharpe_arm": sharpe_arm,
+        "gates_base": gates_base,
+        "gates_arm": gates_arm,
+        "two_sided_base": two_base,
+        "two_sided_arm": two_arm,
+        "criteria": criteria,
+        "decision": "ADOPTED" if all(criteria.values()) else "REJECTED",
+    }
+
+
+def _cell(result: SymbolResult, key: str, fmt: str) -> str:
+    if result.status != "tested" or result.detail.get(key) is None:
+        return "skip"
+    return format(result.detail[key], fmt)
+
+
+def format_selection_experiment(results: dict[str, list[SymbolResult]]) -> str:
+    """Per-symbol table for both rules, then the verdict."""
+    base, arm = results["margin"], results["margin_x_vol"]
+    width = 104
+    header = (
+        f"{'symbol':>10}  {'2x-cost return':>21}  {'sharpe':>13}  {'sign%':>15}  "
+        f"{'|move|':>15}  {'two-sided?':>21}"
+    )
+    lines = [
+        "=" * width,
+        "PRE-REGISTERED EXPERIMENT — docs/preregistration-cost-aware-selection.md",
+        "=" * width,
+        "Same model, same probabilities; each cell is  margin  /  margin x vol72.",
+        "",
+        header,
+        "-" * width,
+    ]
+    for b, a in zip(base, arm, strict=True):
+        cells = [
+            f"{_cell(b, 'doubled_cost_return', '+.1%'):>10} "
+            f"{_cell(a, 'doubled_cost_return', '+.1%'):>10}",
+            f"{_cell(b, 'sharpe', '.2f'):>6} {_cell(a, 'sharpe', '.2f'):>6}",
+            f"{_cell(b, 'sign_accuracy', '.2%'):>7} {_cell(a, 'sign_accuracy', '.2%'):>7}",
+            f"{_cell(b, 'mean_abs_move', '.2%'):>7} {_cell(a, 'mean_abs_move', '.2%'):>7}",
+            f"{_cell(b, 'two_sided', ''):>10} {_cell(a, 'two_sided', ''):>10}",
+        ]
+        lines.append(f"{b.symbol:>10}  " + "  ".join(cells))
+
+    v = judge_selection(base, arm)
+    c = v["criteria"]
+    mark = {True: "pass", False: "FAIL"}
+    lines += [
+        "",
+        "-" * width,
+        f"margin_x_vol: {v['decision']}",
+        f"  1. survives costs better  {mark[c['costs']]}  {v['wins']}/{v['n']} symbols higher "
+        f"at doubled costs, {v['needed']} needed, sign-test p = {v['p_value']:.4f} "
+        f"(alpha {SELECTION_ALPHA})",
+        f"  2. not just bigger bets   {mark[c['sharpe']]}  mean Sharpe {v['sharpe_arm']:.3f} "
+        f"vs {v['sharpe_base']:.3f}",
+        f"  3. no gate passes lost    {mark[c['gates']]}  {v['gates_arm']} vs "
+        f"{v['gates_base']} symbols passing all three gates",
+        f"  4. no long-bias trap      {mark[c['two_sided']]}  {v['two_sided_arm']} vs "
+        f"{v['two_sided_base']} symbols TWO-SIDED",
+        "",
+        "=" * width,
+        "Twenty correlated symbols over one period are not twenty independent tests.",
+        "Record this result in docs/findings.md either way.",
         "=" * width,
     ]
     return "\n".join(lines)
