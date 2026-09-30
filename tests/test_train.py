@@ -38,7 +38,7 @@ def _learnable_dataset(n: int = 4000, seed: int = 0) -> pd.DataFrame:
 def test_train_fold_returns_calibrated_probabilities():
     df = _learnable_dataset()
     cfg = TrainConfig(num_boost_round=40, calibrate=True)
-    result = train_fold(df.iloc[:3000], df.iloc[3000:], cfg)
+    result = train_fold(df.iloc[:3000], df.iloc[3000:], cfg, horizon=24)
 
     assert result.proba.shape == (1000, 3)
     assert np.allclose(result.proba.sum(axis=1), 1.0)
@@ -79,7 +79,7 @@ def test_walk_forward_records_per_fold_detail():
 def test_feature_importance_ranks_the_real_signal_first():
     df = _learnable_dataset()
     cfg = TrainConfig(num_boost_round=60, calibrate=False)
-    result = train_fold(df.iloc[:3000], df.iloc[3000:], cfg)
+    result = train_fold(df.iloc[:3000], df.iloc[3000:], cfg, horizon=24)
     top = max(result.importance, key=result.importance.get)
     assert top == "signal"
 
@@ -258,3 +258,29 @@ def test_the_save_gate_reads_both_verdicts():
         if v["decision"] != "GO"
     ]
     assert failures, "a NO-GO strategy verdict must block the save"
+
+
+def test_out_of_fold_calibration_purges_by_the_horizon_it_was_given(monkeypatch):
+    """A 72-bar label needs a 72-bar purge inside calibration too.
+
+    train_fold used to default to 24 and walk_forward_evaluate never passed the
+    real horizon, so every 48- and 72-bar experiment calibrated on inner folds
+    whose training labels reached into their own test windows.
+    """
+    from cryptopred.models import train as train_module
+
+    seen = []
+    real = train_module.PurgedWalkForward
+
+    def recording(*args, **kwargs):
+        seen.append(kwargs.get("horizon"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(train_module, "PurgedWalkForward", recording)
+    walk_forward_evaluate(
+        _learnable_dataset(n=3000),
+        n_splits=2,
+        horizon=72,
+        config=TrainConfig(num_boost_round=10, calibration_splits=2),
+    )
+    assert seen and set(seen) == {72}

@@ -162,9 +162,15 @@ def fit_oof_calibrators(
 
 
 def train_fold(
-    train: pd.DataFrame, test: pd.DataFrame, config: TrainConfig, horizon: int = 24
+    train: pd.DataFrame, test: pd.DataFrame, config: TrainConfig, *, horizon: int
 ) -> FoldResult:
-    """Fit one model on `train` and predict `test`."""
+    """Fit one model on `train` and predict `test`.
+
+    `horizon` has no default on purpose. It sets the purge inside out-of-fold
+    calibration, and a default of 24 was silently applied to every 48- and
+    72-bar experiment: inner training labels then overlapped inner test windows,
+    and the calibrator learned from probabilities that had seen their answers.
+    """
     features = feature_columns(train)
     features = [f for f in features if f in test.columns]
 
@@ -255,7 +261,7 @@ def walk_forward_evaluate(
         train = dataset.iloc[train_idx]
         test = dataset.iloc[test_idx]
 
-        result = train_fold(train, test, config)
+        result = train_fold(train, test, config, horizon=horizon)
         all_proba.append(result.proba)
         all_true.append(result.y_true)
         all_returns.append(test["forward_return"].to_numpy())

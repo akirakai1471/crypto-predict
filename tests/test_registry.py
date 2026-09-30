@@ -11,7 +11,9 @@ from tests.test_train import _learnable_dataset
 
 def _fold_result():
     df = _learnable_dataset(n=2000)
-    return df, train_fold(df.iloc[:1500], df.iloc[1500:], TrainConfig(num_boost_round=20))
+    return df, train_fold(
+        df.iloc[:1500], df.iloc[1500:], TrainConfig(num_boost_round=20), horizon=24
+    )
 
 
 def test_save_and_load_roundtrip(tmp_path):
@@ -164,7 +166,8 @@ def test_registry_creates_directory(tmp_path):
 def test_calibrators_are_persisted(tmp_path):
     df = _learnable_dataset(n=2000)
     result = train_fold(
-        df.iloc[:1500], df.iloc[1500:], TrainConfig(num_boost_round=20, calibrate=True)
+        df.iloc[:1500], df.iloc[1500:], TrainConfig(num_boost_round=20, calibrate=True),
+        horizon=24,
     )
     assert result.calibrators is not None
 
@@ -180,7 +183,8 @@ def test_calibrators_are_persisted(tmp_path):
 def test_uncalibrated_model_roundtrips_too(tmp_path):
     df = _learnable_dataset(n=2000)
     result = train_fold(
-        df.iloc[:1500], df.iloc[1500:], TrainConfig(num_boost_round=20, calibrate=False)
+        df.iloc[:1500], df.iloc[1500:], TrainConfig(num_boost_round=20, calibrate=False),
+        horizon=24,
     )
     assert result.calibrators is None
 
