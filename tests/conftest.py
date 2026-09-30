@@ -64,3 +64,21 @@ def rising() -> pd.DataFrame:
         },
         index=idx,
     )
+
+
+def record_listening(store, start, end, every: str = "1min", feeds_ok: int = 5) -> None:
+    """Log a completed news poll every `every` from start to end, inclusive.
+
+    One executemany instead of thousands of store.record_poll calls, each of
+    which opens a connection and commits.
+    """
+    import sqlite3
+
+    from cryptopred.news.store import utc_stamp
+
+    times = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq=every)
+    with sqlite3.connect(store.path) as conn:
+        conn.executemany(
+            "INSERT INTO polls (polled_at, feeds_ok, feeds_failed, inserted) VALUES (?, ?, 0, 0)",
+            [(utc_stamp(t), feeds_ok) for t in times],
+        )
