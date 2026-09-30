@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic Atom 1.0 feed. Headlines are invented. -->
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Atom News</title>
+  <id>tag:atom.example.com,2026:feed</id>
+  <updated>2026-09-29T15:00:00Z</updated>
+  <link rel="self" href="https://atom.example.com/feed.atom"/>
+  <entry>
+    <title type="html">Exchange halts withdrawals after &lt;b&gt;$40M exploit&lt;/b&gt;</title>
+    <id>tag:atom.example.com,2026:post-9001</id>
+    <link rel="alternate" type="text/html" href="/2026/09/29/exchange-exploit"/>
+    <link rel="enclosure" href="https://atom.example.com/audio.mp3"/>
+    <published>2026-09-29T14:50:00+02:00</published>
+    <updated>2026-09-29T16:10:00+02:00</updated>
+  </entry>
+  <entry>
+    <title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Fed signals <em>rate cut</em> as ether slides</div></title>
+    <id>https://atom.example.com/2026/09/29/fed-rate-cut</id>
+    <link href="https://atom.example.com/2026/09/29/fed-rate-cut"/>
+    <updated>2026-09-29T15:00:00Z</updated>
+  </entry>
+</feed>
