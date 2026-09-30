@@ -375,3 +375,40 @@ def test_the_cycle_alerts_on_a_fresh_signal_against_the_real_store(tmp_path, mon
 
     log = (tmp_path / "signals.log").read_text(encoding="utf-8")
     assert log.count("model bắn") == 3
+
+
+# -- reading the log back -----------------------------------------------------
+
+
+def test_the_log_reads_back_newest_first_and_verbatim(tmp_path, monkeypatch):
+    """The dashboard shows what was sent, caveat included, not a summary of it."""
+    from cryptopred.serve import alerts
+
+    monkeypatch.setattr(alerts.subprocess, "Popen", lambda *a, **k: None)
+    log = tmp_path / "signals.log"
+    alerts.notify("BTCUSDT — model bắn LONG\n\nCHƯA CHỨNG MINH ĐƯỢC", log_path=log)
+    alerts.notify("BTCUSDT — model bắn SHORT\n\nCHƯA CHỨNG MINH ĐƯỢC", log_path=log)
+
+    entries = alerts.read_log(log)
+    assert [e["message"].splitlines()[0] for e in entries] == [
+        "BTCUSDT — model bắn SHORT",
+        "BTCUSDT — model bắn LONG",
+    ]
+    assert all("CHƯA CHỨNG MINH ĐƯỢC" in e["message"] for e in entries)
+    assert all(e["written_at"].endswith("UTC") for e in entries)
+
+
+def test_reading_the_log_respects_the_limit(tmp_path, monkeypatch):
+    from cryptopred.serve import alerts
+
+    monkeypatch.setattr(alerts.subprocess, "Popen", lambda *a, **k: None)
+    log = tmp_path / "signals.log"
+    for i in range(5):
+        alerts.notify(f"alert {i}", log_path=log)
+    assert [e["message"] for e in alerts.read_log(log, limit=2)] == ["alert 4", "alert 3"]
+
+
+def test_a_missing_log_reads_as_no_alerts(tmp_path):
+    from cryptopred.serve.alerts import read_log
+
+    assert read_log(tmp_path / "never-written.log") == []

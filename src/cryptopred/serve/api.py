@@ -18,6 +18,8 @@ from cryptopred.config import Config, load_config
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.paper.trader import PaperTrader
+from cryptopred.serve import heartbeat
+from cryptopred.serve.alerts import read_log
 from cryptopred.serve.drift import coverage_drift
 from cryptopred.serve.predictor import Predictor
 from cryptopred.serve.store import PredictionStore
@@ -89,7 +91,24 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                         "minutes_behind": round(age, 1),
                     }
                 )
-        return {"ok": True, "data": status}
+        return {"ok": True, "data": status, "scheduler": _scheduler()}
+
+    def _scheduler() -> dict[str, Any]:
+        """Whether the scheduler is still completing cycles.
+
+        Bar freshness above cannot say this on its own: the API process never
+        syncs bars, so stale data looks the same whether the scheduler died or
+        Binance is slow, and it takes three hours to turn red at all.
+        """
+        beat = heartbeat.status(cfg.data.root / "heartbeat.json")
+        last = beat.get("last_cycle")
+        minutes = beat.get("minutes_ago")
+        return {
+            "state": beat["state"],
+            "detail": beat["detail"],
+            "last_cycle": last.isoformat() if last is not None else None,
+            "minutes_ago": round(minutes, 1) if minutes is not None else None,
+        }
 
     def _rule(symbol: str, interval: str) -> dict[str, Any]:
         """The cutoff the live system is actually applying, if a model is loaded."""
@@ -217,6 +236,16 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 "rested_share": (rested / len(closed)) if len(closed) else None,
             },
         }
+
+    @app.get("/api/alerts")
+    def alerts(limit: int = 10) -> dict[str, Any]:
+        """What the scheduler announced, read back from data/signals.log.
+
+        The messages are served verbatim, track record and caveat included. A
+        dashboard that showed only "LONG" would be the alert without the part
+        that stops it reading as advice.
+        """
+        return {"alerts": read_log(cfg.data.root / "signals.log", limit=min(limit, 100))}
 
     @app.get("/api/config")
     def config() -> dict[str, Any]:

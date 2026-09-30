@@ -15,6 +15,7 @@ messages in eight hours would describe one bet as though it were eight.
 from __future__ import annotations
 
 import contextlib
+import re
 import subprocess
 from pathlib import Path
 
@@ -167,6 +168,33 @@ def balloon_parts(message: str) -> tuple[str, str]:
     return title, body
 
 
+# Each entry in signals.log opens with "===== <stamp> =====" on a line of its own.
+_ENTRY_MARK = "====="
+_ENTRY_HEADER = re.compile(rf"^{_ENTRY_MARK} (.+?) {_ENTRY_MARK}$", re.MULTILINE)
+
+
+def read_log(log_path: Path, limit: int = 20) -> list[dict[str, str]]:
+    """The most recent alerts in signals.log, newest first.
+
+    The balloon is gone after eleven seconds, so anything that wants to show
+    what the model fired reads it back from here - the same text, caveat and
+    all, rather than a summary that could drift away from what was sent.
+    """
+    try:
+        text = Path(log_path).read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    headers = list(_ENTRY_HEADER.finditer(text))
+    entries = []
+    for i, header in enumerate(headers):
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
+        entries.append(
+            {"written_at": header.group(1), "message": text[header.end() : end].strip()}
+        )
+    return entries[::-1][: max(limit, 0)]
+
+
 def _ps_quote(value: str) -> str:
     """A PowerShell single-quoted string. Doubling the quote is the escape."""
     return "'" + value.replace("'", "''") + "'"
@@ -185,7 +213,7 @@ def notify(message: str, log_path: Path, popup: bool = True) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC")
     with log_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n===== {stamp} =====\n{message}\n")
+        handle.write(f"\n{_ENTRY_MARK} {stamp} {_ENTRY_MARK}\n{message}\n")
 
     if not popup:
         return

@@ -200,6 +200,17 @@ td.r, th.r { text-align: right; }
 .miss { color: var(--down); }
 
 .empty { color: var(--muted); font-size: 13.5px; padding: 18px 0; }
+
+/* --- alerts: shown verbatim, caveat included --- */
+.alert-list { display: grid; gap: 12px; }
+.alert-item { padding: 14px 16px; }
+.alert-when { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.alert-body {
+  margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12.5px; line-height: 1.5;
+  color: var(--ink-2);
+}
+.alert-body .alert-head { color: var(--ink); font-weight: 600; }
 footer { margin-top: 42px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
 a { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -213,6 +224,7 @@ a { color: var(--accent); }
 
   <header class="top">
     <h1>Bảng Tín Hiệu Crypto</h1>
+    <span class="sub"><span class="dot" id="sched-dot"></span> <span id="sched-text">scheduler: đang kiểm tra…</span></span>
     <span class="sub"><span class="dot" id="health-dot"></span> <span id="health-text">đang tải…</span></span>
   </header>
 
@@ -221,6 +233,11 @@ a { color: var(--accent); }
   <section>
     <p class="eyebrow">Tín hiệu hiện tại</p>
     <div class="grid cards" id="signals"><div class="empty">đang tải…</div></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Thông báo gần đây — nguyên văn, đúng như scheduler đã gửi</p>
+    <div class="alert-list" id="alerts"><div class="empty">đang tải…</div></div>
   </section>
 
   <section>
@@ -273,6 +290,44 @@ a { color: var(--accent); }
 const fmtPct = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : (v * 100).toFixed(d) + "%";
 const fmtNum = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : Number(v).toLocaleString("vi-VN", { minimumFractionDigits: d, maximumFractionDigits: d });
 const shortTime = (iso) => iso ? iso.replace("T", " ").slice(0, 16) : "—";
+
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, ch => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+
+// The heartbeat is the one thing that says the scheduler is alive. Data age
+// cannot: this page never syncs bars, and stale data takes hours to show.
+function renderScheduler(sched) {
+  const dot = document.getElementById("sched-dot");
+  const txt = document.getElementById("sched-text");
+  if (!sched) { dot.className = "dot"; txt.textContent = "scheduler: không rõ"; return; }
+  const mins = sched.minutes_ago;
+  if (sched.state === "alive") {
+    dot.className = "dot live";
+    txt.textContent = `scheduler đang chạy — chu kỳ cuối cách ${Math.round(mins)} phút`;
+  } else if (sched.state === "stale") {
+    dot.className = "dot stale";
+    txt.textContent = `scheduler ĐÃ DỪNG — chu kỳ cuối cách ${(mins / 60).toFixed(1)} giờ, không có gì đang được ghi. Chạy lại run.bat`;
+  } else if (sched.state === "never_started") {
+    dot.className = "dot stale";
+    txt.textContent = "scheduler CHƯA TỪNG CHẠY — chạy run.bat";
+  } else {
+    dot.className = "dot stale";
+    txt.textContent = "scheduler: không đọc được heartbeat";
+  }
+}
+
+function renderAlerts(alerts) {
+  if (!alerts.length) {
+    return '<div class="empty">Chưa có thông báo nào. Model chỉ báo khi bắn tín hiệu mở đầu một đợt mới — phần lớn thời gian nó đứng ngoài.</div>';
+  }
+  return alerts.map(a => {
+    const [head, ...rest] = a.message.split("\n");
+    return `<article class="card alert-item">
+      <div class="alert-when num">ghi lúc ${escapeHtml(a.written_at)}</div>
+      <pre class="alert-body"><span class="alert-head">${escapeHtml(head)}</span>\n${escapeHtml(rest.join("\n"))}</pre>
+    </article>`;
+  }).join("");
+}
 
 async function getJSON(url) {
   const res = await fetch(url);
@@ -428,6 +483,7 @@ async function load() {
 
   try {
     const health = await getJSON("/api/health");
+    renderScheduler(health.scheduler);
     // Only the traded interval matters here. The 1m store is kept for research
     // and is not synced by the scheduler, so its age is not a fault to alarm on.
     const rows = health.data.filter(r => r.bars > 0 && r.interval === "1h");
@@ -437,7 +493,17 @@ async function load() {
     if (worst === null) { dot.className = "dot"; txt.textContent = "chưa có dữ liệu"; }
     else if (worst > 180) { dot.className = "dot stale"; txt.textContent = `dữ liệu 1h trễ ${Math.round(worst)} phút`; }
     else { dot.className = "dot live"; txt.textContent = `nến 1h mới nhất cách ${Math.round(worst)} phút`; }
-  } catch (e) { document.getElementById("health-text").textContent = "không đọc được trạng thái"; }
+  } catch (e) {
+    document.getElementById("health-text").textContent = "không đọc được trạng thái";
+    renderScheduler(null);
+  }
+
+  try {
+    const a = await getJSON("/api/alerts?limit=5");
+    document.getElementById("alerts").innerHTML = renderAlerts(a.alerts);
+  } catch (e) {
+    document.getElementById("alerts").innerHTML = '<div class="empty">Không đọc được thông báo.</div>';
+  }
 
   const signalsEl = document.getElementById("signals");
   const cards = [];
