@@ -123,6 +123,19 @@ uv run cryptopred-ingest klines
 uv run cryptopred-ingest funding
 ```
 
+**Tải lịch sử nhiều năm nhanh hơn — hoặc khi API báo lỗi 451** (Binance chặn API
+theo vùng, ví dụ máy chủ cloud ở Mỹ): lấy từ kho công khai `data.binance.vision`,
+mỗi tháng một file nén, file nào cũng được đối chiếu checksum SHA-256 trước khi
+đọc. 20 coin, 1,05 triệu nến 1h mất 7 phút:
+
+```bash
+uv run cryptopred-ingest vision --config configs/twenty-symbols.yaml
+```
+
+Mặc định dừng ở **hết tháng trước**: kho không có funding theo ngày, nên nến
+tháng này sẽ mang funding cũ. Phần còn lại bù bằng `klines` và `funding` ở trên.
+Nến 1h trong kho bắt đầu từ 01/2020.
+
 Dựng dataset train (kèm báo cáo chất lượng và tầm soát rò rỉ):
 
 ```bash
