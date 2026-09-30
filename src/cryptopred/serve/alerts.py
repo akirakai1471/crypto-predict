@@ -141,13 +141,22 @@ BALLOON_TEXT_LIMIT = 200
 # fails to load in a plain `powershell -NoProfile` session on this machine, and
 # NotifyIcon is .NET Framework, present on every Windows install, and needs no
 # registered AppID.
-_POPUP = """
+#
+# The text reaches PowerShell through environment variables, never through the
+# script. It used to be spliced in as a single-quoted literal with ' doubled -
+# but PowerShell also closes a string on the curly quotes ‘ ’ ‚ ‛, which appear in
+# about one headline in five. Such a title broke the script, and a title built
+# for it could have run commands. A constant script that reads $env cannot be
+# rewritten by what it displays.
+_POPUP_TITLE_ENV = "CRYPTOPRED_BALLOON_TITLE"
+_POPUP_TEXT_ENV = "CRYPTOPRED_BALLOON_TEXT"
+_POPUP = f"""
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $i = New-Object System.Windows.Forms.NotifyIcon
 $i.Icon = [System.Drawing.SystemIcons]::Information
-$i.BalloonTipTitle = {title}
-$i.BalloonTipText = {text}
+$i.BalloonTipTitle = $env:{_POPUP_TITLE_ENV}
+$i.BalloonTipText = $env:{_POPUP_TEXT_ENV}
 $i.Visible = $true
 $i.ShowBalloonTip(10000)
 Start-Sleep -Seconds 11
@@ -198,9 +207,20 @@ def read_log(log_path: Path, limit: int = 20) -> list[dict[str, str]]:
     return entries[::-1][: max(limit, 0)]
 
 
-def _ps_quote(value: str) -> str:
-    """A PowerShell single-quoted string. Doubling the quote is the escape."""
-    return "'" + value.replace("'", "''") + "'"
+def _on_windows() -> bool:
+    return os.name == "nt"
+
+
+def popup_command(message: str) -> tuple[list[str], dict[str, str]]:
+    """The PowerShell command line and environment that show `message`.
+
+    The command line is the same constant for every alert; only the
+    environment carries the text.
+    """
+    title, body = balloon_parts(message)
+    env = {**os.environ, _POPUP_TITLE_ENV: title, _POPUP_TEXT_ENV: body}
+    argv = ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", _POPUP]
+    return argv, env
 
 
 def notify(message: str, log_path: Path, popup: bool = True) -> None:
@@ -226,12 +246,11 @@ def notify(message: str, log_path: Path, popup: bool = True) -> None:
     # TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set; never raises.
     telegram.send(message)
 
-    if os.name != "nt":
+    if not _on_windows():
         # No PowerShell and no desktop to show a balloon on - a server.
         return
 
-    title, body = balloon_parts(message)
-    script = _POPUP.format(title=_ps_quote(title), text=_ps_quote(body))
+    argv, env = popup_command(message)
     # A machine with no window station, a locked session, a missing PowerShell -
     # none of those are reasons to lose the alert or break the cycle that made
     # it. The log above already holds the message.
@@ -239,7 +258,8 @@ def notify(message: str, log_path: Path, popup: bool = True) -> None:
         # Detached and not waited on: the balloon lives for eleven seconds and
         # the scheduler cycle has no reason to sit through it.
         subprocess.Popen(  # noqa: S603
-            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            argv,
+            env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

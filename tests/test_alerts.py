@@ -412,3 +412,33 @@ def test_a_missing_log_reads_as_no_alerts(tmp_path):
     from cryptopred.serve.alerts import read_log
 
     assert read_log(tmp_path / "never-written.log") == []
+
+
+# -- the popup command cannot be rewritten by what it shows ----------------------
+
+
+@pytest.mark.parametrize("quote", ["'", "‘", "’", "‚", "‛", '"', "`", "$"])
+def test_no_character_in_a_headline_reaches_the_powershell_script(quote):
+    """PowerShell closes a single-quoted string on ' and also on the curly
+    quotes, which about one real headline in five contains. The text now travels
+    in the environment, so the script is the same constant whatever it shows."""
+    from cryptopred.serve.alerts import _POPUP, popup_command
+
+    message = f"BTCUSDT {quote}; Write-Output X; # headline\nHồ sơ: đúng 1/2"
+    argv, env = popup_command(message)
+    assert argv[-1] == _POPUP  # one constant script, whatever the headline
+    assert "headline" not in argv[-1] and "Write-Output" not in argv[-1]
+    assert env["CRYPTOPRED_BALLOON_TITLE"] == f"BTCUSDT {quote}; Write-Output X; # headline"
+    assert env["CRYPTOPRED_BALLOON_TEXT"] == "Hồ sơ: đúng 1/2"
+
+
+def test_the_popup_is_spawned_with_the_text_in_its_environment(tmp_path, monkeypatch):
+    from cryptopred.serve import alerts
+
+    calls = []
+    monkeypatch.setattr(alerts, "_on_windows", lambda: True)
+    monkeypatch.setattr(alerts.subprocess, "Popen", lambda argv, **kw: calls.append((argv, kw)))
+    alerts.notify("ETH’s ETF approved\nHồ sơ: x", log_path=tmp_path / "news.log")
+    argv, kwargs = calls[0]
+    assert argv[-1] == alerts._POPUP
+    assert kwargs["env"]["CRYPTOPRED_BALLOON_TITLE"] == "ETH’s ETF approved"
