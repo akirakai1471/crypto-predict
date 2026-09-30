@@ -1,0 +1,46 @@
+# Two long-running containers sharing ./data. See docs/deploy-vps.md.
+#
+#   docker compose up -d --build     start (and rebuild after `git pull`)
+#   docker compose ps                both should say "Up"
+#   docker compose logs -f scheduler follow the prediction cycle
+#   docker compose run --rm scheduler python -m cryptopred.serve.cli doctor
+#
+# restart: unless-stopped brings both back after a crash or a server reboot.
+
+x-common: &common
+  image: cryptopred:latest
+  env_file:
+    - path: .env          # Telegram and the external ping; see .env.example
+      required: false
+  volumes:
+    - ./data:/app/data
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:              # without a cap, a year of logs fills a small disk
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  scheduler:
+    <<: *common
+    build: .
+    command: ["python", "-m", "cryptopred.serve.cli", "schedule", "--interval", "1h", "--minute", "2"]
+    healthcheck:
+      # The heartbeat test status.bat uses: unhealthy once no cycle has
+      # finished for 150 minutes. The first cycle runs at start-up.
+      test: ["CMD", "python", "-m", "cryptopred.serve.cli", "health"]
+      interval: 10m
+      timeout: 60s
+      start_period: 30m
+      retries: 1
+
+  dashboard:
+    <<: *common
+    command: ["uvicorn", "cryptopred.serve.api:app", "--host", "0.0.0.0", "--port", "8077"]
+    # Published on the server's loopback only. The dashboard has no login, so it
+    # is reached through an SSH tunnel, never opened to the internet.
+    ports:
+      - "127.0.0.1:8077:8077"
+    depends_on:
+      - scheduler

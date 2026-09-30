@@ -20,7 +20,7 @@ from cryptopred.models.registry import ModelRegistry
 from cryptopred.news.store import NewsStore
 from cryptopred.news.tags import TAG_CAVEAT
 from cryptopred.paper.trader import PaperTrader
-from cryptopred.serve import heartbeat
+from cryptopred.serve import heartbeat, watchdog
 from cryptopred.serve.alerts import read_log
 from cryptopred.serve.drift import coverage_drift
 from cryptopred.serve.predictor import Predictor
@@ -43,6 +43,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     )
     predictors: dict[tuple[str, str], Predictor] = {}
     news = NewsStore(cfg.data.root / "news.db")
+    # This process outlives the scheduler, so it is the one that can say the
+    # scheduler died. Only when Telegram is configured; otherwise a no-op.
+    watchdog.start(cfg.data.root / "heartbeat.json")
 
     def get_predictor(symbol: str, interval: str) -> Predictor:
         """Cached, but invalidated when a newer model is saved.

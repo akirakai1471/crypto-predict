@@ -15,11 +15,14 @@ messages in eight hours would describe one bet as though it were eight.
 from __future__ import annotations
 
 import contextlib
+import os
 import re
 import subprocess
 from pathlib import Path
 
 import pandas as pd
+
+from cryptopred.serve import telegram
 
 # Below this many scored signals a hit rate is noise. Matches serve/status.py.
 MIN_SIGNALS_FOR_A_CLAIM = 100
@@ -216,6 +219,15 @@ def notify(message: str, log_path: Path, popup: bool = True) -> None:
         handle.write(f"\n{_ENTRY_MARK} {stamp} {_ENTRY_MARK}\n{message}\n")
 
     if not popup:
+        return
+
+    # The full message, caveat included: a phone has room for it, and the
+    # caveat is the part that stops an alert reading as advice. Off unless
+    # TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set; never raises.
+    telegram.send(message)
+
+    if os.name != "nt":
+        # No PowerShell and no desktop to show a balloon on - a server.
         return
 
     title, body = balloon_parts(message)

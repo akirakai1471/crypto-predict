@@ -210,6 +210,21 @@ Chạy scheduler dự đoán mỗi lần đóng nến (cửa sổ terminal riên
 uv run cryptopred-serve schedule
 ```
 
+## Chạy 24/7 trên máy chủ
+
+Không muốn để PC mở cả ngày: thuê một VPS Linux nhỏ và chạy bằng Docker —
+tự khởi động lại khi lỗi hay khi máy chủ reboot, báo tín hiệu và báo "scheduler
+đã dừng" qua **Telegram**. Hướng dẫn từng bước: **`docs/deploy-vps.md`**.
+
+```bash
+docker compose run --rm scheduler python -m cryptopred.serve.cli doctor --send-test
+docker compose up -d
+```
+
+`doctor` kiểm tra trước khi chạy: Binance có chặn vùng của máy chủ không (HTTP
+451 — lỗi hay gặp nhất với VPS mới), có model chưa, ghi được dữ liệu không,
+Telegram có tới điện thoại không.
+
 ## Chạy dài ngày
 
 Nhấp đúp `run.bat` — mở 2 cửa sổ (scheduler + dashboard) và bật trình duyệt.
