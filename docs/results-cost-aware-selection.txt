@@ -1,0 +1,39 @@
+========================================================================================================
+PRE-REGISTERED EXPERIMENT — docs/preregistration-cost-aware-selection.md
+========================================================================================================
+Same model, same probabilities; each cell is  margin  /  margin x vol72.
+
+    symbol         2x-cost return         sharpe            sign%           |move|             two-sided?
+--------------------------------------------------------------------------------------------------------
+   BTCUSDT      -18.3%      -5.1%   -0.03   0.16   55.76%  56.38%    2.11%   2.66%   ONE-SIDED  ONE-SIDED
+   ETHUSDT      -17.9%     -54.2%    0.02  -0.24   55.40%  51.68%    3.23%   4.26%   TWO-SIDED  TWO-SIDED
+   SOLUSDT      -11.4%     -22.4%    0.12   0.11   51.45%  51.07%    4.08%   4.86%   ONE-SIDED  ONE-SIDED
+   XRPUSDT      -29.7%      +3.0%   -0.17   0.23   55.38%  56.16%    3.02%   4.57%   ONE-SIDED  ONE-SIDED
+   ADAUSDT      +67.6%     +86.6%    0.58   0.57   57.09%  58.98%    3.72%   4.52%   TWO-SIDED  TWO-SIDED
+  DOGEUSDT      +16.9%     -49.8%    0.35  -0.17   55.99%  53.36%    3.84%   4.84%   ONE-SIDED  ONE-SIDED
+  AVAXUSDT      -12.2%     -13.5%    0.08   0.15   52.54%  54.47%    3.83%   4.81%   TWO-SIDED  ONE-SIDED
+  LINKUSDT      +43.6%     +85.1%    0.53   0.57   55.52%  57.30%    3.48%   4.62%   TWO-SIDED  TWO-SIDED
+   DOTUSDT      -17.9%     +58.7%   -0.04   0.56   54.44%  57.32%    3.10%   3.88%   TWO-SIDED  TWO-SIDED
+   LTCUSDT      -26.0%     +78.5%   -0.12   0.53   54.20%  59.69%    2.97%   4.49%   TWO-SIDED  TWO-SIDED
+   BCHUSDT      -29.2%     -52.4%   -0.11  -0.07   55.86%  53.84%    3.02%   4.78%   ONE-SIDED  ONE-SIDED
+  ATOMUSDT      -28.7%     +15.0%   -0.07   0.30   51.07%  53.13%    3.55%   5.04%   TWO-SIDED  ONE-SIDED
+  NEARUSDT      -28.3%     -52.8%   -0.14  -0.20   52.41%  52.33%    3.82%   5.26%   ONE-SIDED  ONE-SIDED
+   APTUSDT       -4.9%      +1.3%    0.12   0.22   55.02%  55.43%    3.45%   3.92%   ONE-SIDED  TWO-SIDED
+   ARBUSDT      -17.0%      +7.3%   -0.13   0.29   53.37%  57.24%    3.97%   4.38%   TWO-SIDED  TWO-SIDED
+    OPUSDT      +37.2%     +29.6%    0.69   0.50   54.79%  56.11%    3.52%   3.82%   TWO-SIDED  TWO-SIDED
+   FILUSDT      -23.8%     -65.1%   -0.01  -0.41   57.51%  54.81%    4.39%   5.39%   ONE-SIDED  ONE-SIDED
+   INJUSDT      +27.7%    +139.2%    0.56   1.05   51.08%  54.03%    3.80%   5.24%   TWO-SIDED  ONE-SIDED
+   TRXUSDT      -51.4%     -25.5%   -0.76   0.04   53.55%  52.63%    2.02%   3.46%    UNPROVEN   UNPROVEN
+   ETCUSDT      +57.9%     +74.9%    0.60   0.53   56.44%  57.64%    3.33%   4.57%   TWO-SIDED  TWO-SIDED
+
+--------------------------------------------------------------------------------------------------------
+margin_x_vol: REJECTED
+  1. survives costs better  FAIL  12/20 symbols higher at doubled costs, 15 needed, sign-test p = 0.2517 (alpha 0.05)
+  2. not just bigger bets   pass  mean Sharpe 0.235 vs 0.104
+  3. no gate passes lost    pass  8 vs 5 symbols passing all three gates
+  4. no long-bias trap      FAIL  9 vs 11 symbols TWO-SIDED
+
+========================================================================================================
+Twenty correlated symbols over one period are not twenty independent tests.
+Record this result in docs/findings.md either way.
+========================================================================================================
