@@ -27,7 +27,7 @@ from typing import Any
 
 import pandas as pd
 
-from cryptopred.news.parse import Entry, title_key
+from cryptopred.news.parse import Entry, safe_link, title_key
 from cryptopred.news.tags import DEFAULT_TAGGER, Tagger
 
 # The same wire story syndicated by two outlets is one headline, not two. A
@@ -200,10 +200,16 @@ class NewsStore:
     # -- reading ---------------------------------------------------------------
 
     def annotate(self, row: dict[str, Any]) -> dict[str, Any]:
-        """Add tags computed now, from the title, under today's keyword lists."""
+        """Add tags computed now, from the title, under today's keyword lists.
+
+        The link is re-checked on the way out as well as on the way in: the
+        parser drops non-http links, but a row written by anything else must
+        not be able to hand the dashboard a `javascript:` href either.
+        """
         tags = self.tagger.tag(row["title"])
         return {
             **row,
+            "link": safe_link(row.get("link")),
             "symbols": list(tags.symbols),
             "high_impact": tags.high_impact,
             "impact_terms": list(tags.impact_terms),
