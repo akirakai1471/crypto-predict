@@ -100,13 +100,17 @@ class FeedConfig(BaseModel):
 
 
 # Every host here has to be reachable from the machine running the scheduler.
-# A feed that redirects to another host needs that host allowed too.
+# A feed that redirects to another host needs that host allowed too. Two URLs
+# are the ones their old addresses redirect to, as measured on 2026-09-30:
+# CoinDesk's ".../rss/" answers 308 to ".../rss" (a wasted round trip every
+# minute), and Bitcoin Magazine's "/.rss/full/" answers 301 to PLAIN HTTP
+# "http://bitcoinmagazine.com/feed", which the fetcher refuses.
 DEFAULT_FEEDS: list[dict[str, str]] = [
-    {"name": "CoinDesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"},
+    {"name": "CoinDesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss"},
     {"name": "Cointelegraph", "url": "https://cointelegraph.com/rss"},
     {"name": "Decrypt", "url": "https://decrypt.co/feed"},
     {"name": "The Block", "url": "https://www.theblock.co/rss.xml"},
-    {"name": "Bitcoin Magazine", "url": "https://bitcoinmagazine.com/.rss/full/"},
+    {"name": "Bitcoin Magazine", "url": "https://bitcoinmagazine.com/feed"},
 ]
 
 

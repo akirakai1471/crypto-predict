@@ -1,19 +1,27 @@
 """Poll feeds cheaply, and never let one publisher stop the others.
 
-Every minute is affordable only because an unchanged feed costs one
-conditional request answered by 304 and a few hundred bytes: the ETag and
-Last-Modified from the last good response are sent back as If-None-Match and
-If-Modified-Since. Validators are kept in memory per feed, so the first poll
-after a restart downloads each feed once in full.
+Every minute is affordable because an unchanged feed costs one conditional
+request answered by 304: the ETag and Last-Modified from the last good response
+go back as If-None-Match and If-Modified-Since. That holds only for publishers
+that send them. Measured 2026-09-30: The Block and Bitcoin Magazine send both,
+Cointelegraph and Decrypt send Last-Modified, CoinDesk sends neither and costs
+a full ~30 KB download every poll. Validators are kept in memory per feed, so
+the first poll after a restart downloads each feed once in full.
 
 Failure is the normal case for a set of third-party feeds - a timeout, a 503,
 a Cloudflare page served with status 200, a feed that moved. `fetch` turns
-every one of those into a FeedResult with status "error", logs it and counts
-it. It never raises, so a broken feed costs its own headlines and nothing else.
+every one of those into a FeedResult with status "error" and counts it. It
+never raises, so a broken feed costs its own headlines and nothing else.
+
+Logging is sized for a job that runs 1,440 times a day beside an hourly log
+someone actually reads: a failing feed warns on its first failure and then
+hourly, and says when it recovers; httpx's own line per request is dropped
+while a news fetch is running (and only then).
 """
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import time
 from collections import Counter
@@ -46,6 +54,29 @@ MAX_FEED_BYTES = 5_000_000
 # A feed silent for longer than this has left a gap: the next successful fetch
 # may carry items published while nobody was listening.
 BACKLOG_AFTER_SECONDS = 15 * 60
+# A feed that stays dead warns on its first failure, then once per this many.
+# At a 60-second poll that is hourly rather than 1,440 warnings a day.
+REPEAT_WARNING_EVERY = 60
+
+_FETCHING = contextvars.ContextVar("cryptopred_news_fetching", default=False)
+
+
+class QuietFeedRequests(logging.Filter):
+    """Drop httpx's INFO line per request, but only inside a news fetch.
+
+    The flag is a context variable, so it is set only in the thread doing the
+    fetch: the prediction cycle's Binance requests in their own thread keep
+    logging exactly as before.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno > logging.INFO or not _FETCHING.get()
+
+
+def _install_quiet_requests() -> None:
+    httpx_log = logging.getLogger("httpx")
+    if not any(isinstance(f, QuietFeedRequests) for f in httpx_log.filters):
+        httpx_log.addFilter(QuietFeedRequests())
 
 
 @dataclass
@@ -94,8 +125,10 @@ class FeedFetcher:
         self._wall_clock = wall_clock
         self._validators: dict[str, dict[str, str]] = {}
         self._last_success: dict[str, float] = {}
-        # Failures since this fetcher was created, per feed name.
+        # Failures since this fetcher was created, and in a row, per feed name.
         self.failures: Counter[str] = Counter()
+        self.consecutive_failures: Counter[str] = Counter()
+        _install_quiet_requests()
 
     def close(self) -> None:
         self._client.close()
@@ -111,17 +144,32 @@ class FeedFetcher:
 
     def fetch(self, feed: FeedConfig) -> FeedResult:
         """Fetch and parse one feed. Never raises."""
+        token = _FETCHING.set(True)
         try:
             result = self._fetch(feed)
         except Exception as exc:  # noqa: BLE001 - one publisher must never stop the others
             result = FeedResult(
                 feed.name, feed.url, "error", error=f"{type(exc).__name__}: {exc}"
             )
+        finally:
+            _FETCHING.reset(token)
 
         if not result.ok:
             self.failures[feed.name] += 1
-            logger.warning("news feed %s failed: %s", feed.name, result.error)
+            self.consecutive_failures[feed.name] += 1
+            streak = self.consecutive_failures[feed.name]
+            if streak == 1 or streak % REPEAT_WARNING_EVERY == 0:
+                logger.warning(
+                    "news feed %s failed (%d in a row): %s", feed.name, streak, result.error
+                )
             return result
+
+        if self.consecutive_failures[feed.name]:
+            logger.info(
+                "news feed %s recovered after %d failures",
+                feed.name, self.consecutive_failures[feed.name],
+            )
+            self.consecutive_failures[feed.name] = 0
 
         now = self._wall_clock()
         last = self._last_success.get(feed.url)
@@ -133,6 +181,15 @@ class FeedFetcher:
         headers = self._validators.get(feed.url, {})
         started = self._clock()
         with self._client.stream("GET", feed.url, headers=headers) as response:
+            # Bitcoin Magazine's old feed URL redirects from https to plain
+            # http. Content fetched in the clear could have been rewritten on
+            # the way, so it is refused rather than stored as if it were not.
+            if feed.url.lower().startswith("https://") and response.url.scheme != "https":
+                return FeedResult(
+                    feed.name, feed.url, "error",
+                    error=f"redirected from https to plain http ({response.url})",
+                    http_status=response.status_code,
+                )
             if response.status_code == 304:
                 return FeedResult(feed.name, feed.url, "not_modified", http_status=304)
             if response.status_code != 200:

@@ -229,3 +229,68 @@ def test_the_first_success_after_an_outage_is_backlog_again():
     clock.t += 60
     assert clock.t - 1_000_000.0 > BACKLOG_AFTER_SECONDS
     assert fetcher.fetch(GOOD).backlog is True
+
+
+# -- redirects and logging --------------------------------------------------------------
+
+
+def test_a_redirect_from_https_to_plain_http_is_refused():
+    """Bitcoin Magazine's old feed URL does exactly this (measured 2026-09-30).
+    Content that crossed the network in the clear could have been rewritten on
+    the way; it must not be stored as though it had not."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.scheme == "https":
+            return httpx.Response(301, headers={"Location": "http://good.example.com/feed"})
+        return httpx.Response(200, content=RSS)
+
+    fetcher = _fetcher(handler, [GOOD])
+    result = fetcher.fetch(GOOD)
+    assert result.status == "error"
+    assert "plain http" in result.error
+    assert result.entries == []
+    assert fetcher.failures["Good"] == 1
+
+
+def test_a_dead_feed_warns_once_then_hourly_and_says_when_it_recovers(caplog):
+    """A feed down for a day must not print 1,440 warnings into the log someone
+    reads to see whether the hourly predictions ran."""
+    import logging
+
+    from cryptopred.news.fetch import REPEAT_WARNING_EVERY
+
+    state = {"down": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if state["down"]:
+            return httpx.Response(503)
+        return httpx.Response(200, content=RSS)
+
+    fetcher = _fetcher(handler, [GOOD])
+    with caplog.at_level(logging.INFO, logger="cryptopred.news.fetch"):
+        for _ in range(REPEAT_WARNING_EVERY * 2):
+            fetcher.fetch(GOOD)
+        state["down"] = False
+        fetcher.fetch(GOOD)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 3  # the first failure, then the 60th and the 120th
+    assert "recovered after 120 failures" in caplog.records[-1].getMessage()
+    assert fetcher.failures["Good"] == 120
+    assert fetcher.consecutive_failures["Good"] == 0
+
+
+def test_httpx_request_lines_are_dropped_only_inside_a_news_fetch(caplog):
+    """httpx logs every request at INFO: five or more lines a minute from news
+    alone. The prediction cycle's own requests must keep logging."""
+    import logging
+
+    fetcher = _fetcher(lambda req: httpx.Response(200, content=RSS), [GOOD])
+    other = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200)))
+    with caplog.at_level(logging.INFO, logger="httpx"):
+        fetcher.fetch(GOOD)
+        other.get("https://fapi.binance.example/klines")
+
+    lines = [r.getMessage() for r in caplog.records if r.name == "httpx"]
+    assert len(lines) == 1
+    assert "fapi.binance.example" in lines[0]

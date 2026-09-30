@@ -74,6 +74,30 @@ def _news_job(cfg: Config):
         return None
 
 
+class QuietNewsRuns(logging.Filter):
+    """Drop APScheduler's routine INFO lines for the news job only.
+
+    It logs "Running job" and "executed successfully" for every run. At one
+    news poll a minute that is 2,880 lines a day, burying the hourly cycle's
+    log that someone reads to see whether predictions happened. Warnings and
+    errors about the news job - missed runs, a run still going when the next
+    was due - still pass, and the job logs for itself when it stored or failed
+    something.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno > logging.INFO or not record.args:
+            return True
+        args = record.args if isinstance(record.args, tuple) else (record.args,)
+        return getattr(args[0], "id", None) != "news"
+
+
+def _quiet_news_runs() -> None:
+    executor_log = logging.getLogger("apscheduler.executors.default")
+    if not any(isinstance(f, QuietNewsRuns) for f in executor_log.filters):
+        executor_log.addFilter(QuietNewsRuns())
+
+
 def build_scheduler(cfg: Config, interval: str, minute: int):
     """The hourly prediction cycle, plus the news poll every cfg.news.poll_seconds.
 
@@ -107,6 +131,7 @@ def build_scheduler(cfg: Config, interval: str, minute: int):
             coalesce=True,
             misfire_grace_time=cfg.news.poll_seconds,
         )
+        _quiet_news_runs()
     return scheduler
 
 

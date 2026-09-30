@@ -47,9 +47,9 @@ news:
   poll_seconds: 60            # conditional GET: an unchanged feed costs a 304
   alert_high_impact: true     # high-impact + tagged BTCUSDT/ETHUSDT -> data/news.log
   max_alerts_per_hour: 3
-  feeds:
-    - {name: CoinDesk, url: "https://www.coindesk.com/arc/outboundfeeds/rss/"}
+  feeds:    # https only; see DEFAULT_FEEDS in config.py for why two differ from the obvious URL
+    - {name: CoinDesk, url: "https://www.coindesk.com/arc/outboundfeeds/rss"}
     - {name: Cointelegraph, url: "https://cointelegraph.com/rss"}
     - {name: Decrypt, url: "https://decrypt.co/feed"}
     - {name: The Block, url: "https://www.theblock.co/rss.xml"}
-    - {name: Bitcoin Magazine, url: "https://bitcoinmagazine.com/.rss/full/"}
+    - {name: Bitcoin Magazine, url: "https://bitcoinmagazine.com/feed"}

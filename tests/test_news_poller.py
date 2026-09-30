@@ -172,3 +172,28 @@ def test_no_feeds_means_no_news_job(cfg):
 
     cfg.news.feeds = []
     assert build_scheduler(cfg, "1h", 2).get_job("news") is None
+
+
+def test_the_news_jobs_routine_log_lines_are_dropped_and_the_cycles_are_not(cfg):
+    """2,880 "Running job" lines a day would bury the hourly cycle's own log."""
+    import logging
+
+    from cryptopred.serve.cli import QuietNewsRuns, build_scheduler
+
+    scheduler = build_scheduler(cfg, "1h", 2)
+    news, cycle = scheduler.get_job("news"), scheduler.get_job("cycle")
+
+    def record(level, msg, job):
+        return logging.LogRecord(
+            "apscheduler.executors.default", level, __file__, 1, msg, (job,), None
+        )
+
+    quiet = QuietNewsRuns()
+    assert not quiet.filter(record(logging.INFO, 'Running job "%s"', news))
+    assert not quiet.filter(record(logging.INFO, 'Job "%s" executed successfully', news))
+    assert quiet.filter(record(logging.INFO, 'Running job "%s"', cycle))
+    assert quiet.filter(record(logging.WARNING, 'Run time of job "%s" was missed', news))
+    assert any(
+        isinstance(f, QuietNewsRuns)
+        for f in logging.getLogger("apscheduler.executors.default").filters
+    )

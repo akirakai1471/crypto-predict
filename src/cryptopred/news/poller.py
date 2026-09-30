@@ -128,8 +128,9 @@ class NewsJob:
             except Exception:  # noqa: BLE001 - a lost alert must not lose the pass
                 logger.exception("news alerts failed")
 
-        # Quiet unless something happened: a line every minute would drown the
-        # prediction cycle's hourly log.
-        if summary.inserted or summary.feeds_failed:
-            logger.info("news pass: %s", counts)
+        # Quiet unless something was stored: a line every minute would drown
+        # the prediction cycle's hourly log. Feed failures log themselves, at
+        # a rate that does not repeat every minute (news/fetch.py).
+        if summary.inserted:
+            logger.info("news pass: %s (%d backlog)", counts, summary.backlog)
         return counts
