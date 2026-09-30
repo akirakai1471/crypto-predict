@@ -17,9 +17,10 @@ Four rules keep it from turning into noise or a stale echo:
   from an hour ago is not news, and the dashboard shows it anyway.
 - Nothing old. Backlog rows (the first fetch after a start or an outage) are
   never candidates, a headline is only considered for FRESH_FOR after we
-  received it, and one the publisher itself dates more than MAX_PUBLISHER_LAG
-  earlier is recorded as stale. A publisher date can only suppress an alert
-  here, never cause one, so a wrong date costs at most a missed message.
+  received it, and one that was old on arrival - its publisher dates it more
+  than OLD_ON_ARRIVAL earlier (news/store.py) - is recorded as stale. A
+  publisher date can only suppress an alert here, never cause one, so a wrong
+  date costs at most a missed message.
 """
 
 from __future__ import annotations
@@ -39,7 +40,6 @@ from cryptopred.serve.alerts import notify
 logger = logging.getLogger(__name__)
 
 FRESH_FOR = pd.Timedelta(minutes=30)
-MAX_PUBLISHER_LAG = pd.Timedelta(hours=2)
 RATE_WINDOW = pd.Timedelta(hours=1)
 
 NOT_A_SIGNAL = (
@@ -89,10 +89,7 @@ def alert_fresh_headlines(
             continue
         uid = item["uid"]
 
-        published = item.get("published_at")
-        if published and pd.Timestamp(item["received_at"]) - pd.Timestamp(
-            published
-        ) > MAX_PUBLISHER_LAG:
+        if item["old_on_arrival"]:
             if store.claim_alert(uid, "stale", at=now):
                 counts["stale"] += 1
             continue

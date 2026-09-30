@@ -406,7 +406,7 @@ function renderNews(payload) {
 
 function newsNote(payload) {
   const last = payload.last_poll;
-  const every = `Quét ${payload.n_feeds} nguồn mỗi ${payload.poll_seconds} giây; giờ bên trái là lúc hệ thống NHẬN tin.`;
+  const every = `Quét ${payload.n_feeds} nguồn mỗi ${payload.poll_seconds} giây; giờ bên trái là lúc hệ thống NHẬN tin. Tin mà chính toà soạn ghi sớm hơn lúc nhận quá 2 giờ bị ẩn.`;
   let state;
   if (!last) state = "Chưa quét lần nào — bộ quét tin chạy trong scheduler.";
   else if (last.minutes_ago > 10) state = `Lần quét cuối cách ${Math.round(last.minutes_ago)} phút — bộ quét tin có thể đã dừng.`;

@@ -62,12 +62,16 @@ def poll_once(
     happen, and it must not be logged as though it did.
     """
     results = fetcher.fetch_all()
+    # One stamp for the whole pass, read after the last response arrived: never
+    # earlier than any headline was actually in hand, which is the only
+    # direction received_at must not err in.
+    received_at = clock()
     inserted: list[dict[str, Any]] = []
     for result in results:
         if result.status == "ok" and result.entries:
             inserted += store.add(
                 result.entries, source=result.name, backlog=result.backlog,
-                received_at=clock(),
+                received_at=received_at,
             )
     summary = PollSummary(results=results, inserted=inserted)
     store.record_poll(

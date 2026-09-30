@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from cryptopred.news.parse import Entry
-from cryptopred.news.store import NewsStore, utc_stamp
+from cryptopred.news.store import OLD_ON_ARRIVAL, NewsStore, utc_stamp
 
 T0 = pd.Timestamp("2026-09-29T12:00:00Z")
 
@@ -74,7 +74,7 @@ def test_a_duplicate_title_inside_one_batch_is_written_once(store):
 def test_published_at_is_kept_beside_received_at_not_instead_of_it(store):
     backdated = datetime(2026, 9, 27, 8, 0, tzinfo=UTC)
     store.add([_entry("a", "Old story", published=backdated)], source="S", received_at=T0)
-    (row,) = store.recent()
+    (row,) = store.recent(include_old=True)
     assert pd.Timestamp(row["published_at"]) == pd.Timestamp(backdated)
     assert pd.Timestamp(row["received_at"]) == T0
 
@@ -163,3 +163,51 @@ def test_an_alert_decision_can_be_claimed_only_once(store):
     assert store.claim_alert("uid-1", "sent", at=T0)
     assert not store.claim_alert("uid-1", "sent", at=T0 + pd.Timedelta(minutes=1))
     assert store.alerts_sent_since(T0 - pd.Timedelta(minutes=1)) == 1
+
+
+def test_a_headline_old_on_arrival_is_flagged_and_left_out_of_latest(store):
+    """Measured on a real feed: a poll fifteen seconds after the first brought
+    twenty items dated nine months back. They are not the latest news."""
+    store.add(
+        [_entry("old", "Video from last winter",
+                published=(T0 - OLD_ON_ARRIVAL - pd.Timedelta(minutes=1)).to_pydatetime())],
+        source="S", received_at=T0,
+    )
+    store.add(
+        [_entry("new", "Just out", published=(T0 - pd.Timedelta(minutes=4)).to_pydatetime())],
+        source="S", received_at=T0,
+    )
+    assert [r["uid"] for r in store.recent()] == ["new"]
+    flags = {r["uid"]: r["old_on_arrival"] for r in store.recent(include_old=True)}
+    assert flags == {"old": True, "new": False}
+
+
+def test_a_publisher_date_in_the_future_or_missing_is_not_old(store):
+    """Clock skew is not age, and no date is no evidence of age."""
+    store.add([_entry("skew", "From the future",
+                      published=(T0 + pd.Timedelta(hours=3)).to_pydatetime())],
+              source="S", received_at=T0)
+    store.add([_entry("none", "No date")], source="S", received_at=T0)
+    assert {r["uid"] for r in store.recent()} == {"skew", "none"}
+
+
+def test_the_features_frame_carries_the_old_flag_but_not_the_date(store):
+    """The only use of a publisher's date downstream is one that can drop a row."""
+    store.add([_entry("old", "Old",
+                      published=(T0 - pd.Timedelta(days=3)).to_pydatetime())],
+              source="S", received_at=T0)
+    frame = store.headlines_frame()
+    assert "published_at" not in frame.columns
+    assert frame["old_on_arrival"].tolist() == [True]
+
+
+def test_rows_from_one_pass_are_listed_newest_published_first(store):
+    """A pass stamps its rows alike, so received_at cannot order them."""
+    store.add(
+        [
+            _entry("older", "Older", published=(T0 - pd.Timedelta(minutes=50)).to_pydatetime()),
+            _entry("newer", "Newer", published=(T0 - pd.Timedelta(minutes=5)).to_pydatetime()),
+        ],
+        source="S", received_at=T0,
+    )
+    assert [r["uid"] for r in store.recent()] == ["newer", "older"]

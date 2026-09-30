@@ -9,8 +9,10 @@ Collect three months or more, then measure.
 
 Point-in-time: a bar's value counts only headlines whose `received_at` is at or
 before that bar's `close_time` - the same rule tests/test_leakage.py enforces
-for price features. `published_at` is never read here; a publisher's date can
-be earlier than the moment anyone could have seen the headline.
+for price features. A publisher's date never places a headline: it can be
+earlier than the moment anyone could have seen it. It is used only to drop
+rows that were old on arrival (news/store.py) - a direction in which a wrong
+date can remove a headline but never admit one early.
 
 Zero headlines while nothing was listening is not zero news. A window is NaN,
 not 0, when it reaches back before collection began, when the poller was not
@@ -85,10 +87,14 @@ def news_features(
     tagged = np.array([symbol in t.symbols for t in tags], dtype=bool)
     impact = np.array([t.high_impact for t in tags], dtype=bool)
     backlog = heads["is_backlog"].to_numpy(dtype=bool) if len(heads) else np.zeros(0, bool)
+    stale = heads["old_on_arrival"].to_numpy(dtype=bool) if len(heads) else np.zeros(0, bool)
     received = _ns(heads["received_at"]) if len(heads) else np.zeros(0, np.int64)
 
-    tagged_times = np.sort(received[tagged & ~backlog])
-    impact_times = np.sort(received[tagged & impact & ~backlog])
+    # Old-on-arrival rows are not news flow, but nothing was missed either, so
+    # they are dropped from the counts rather than blanking the window.
+    counted = tagged & ~backlog & ~stale
+    tagged_times = np.sort(received[counted])
+    impact_times = np.sort(received[counted & impact])
     backlog_times = np.sort(received[backlog])
 
     # The end of every hole in the record, with collection start as the first.

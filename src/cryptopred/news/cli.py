@@ -70,6 +70,8 @@ def format_headline(row: dict[str, Any]) -> str:
         head.append(f"TÁC ĐỘNG CAO? ({', '.join(row['impact_terms'])})")
     if row.get("is_backlog"):
         head.append("tồn đọng")
+    if row.get("old_on_arrival"):
+        head.append("cũ lúc nhận")
     lines = [" · ".join(head), f"  {row['title']}"]
     if row.get("link"):
         lines.append(f"  {row['link']}")
@@ -91,9 +93,11 @@ def run_watch(
     while max_passes is None or passes < max_passes:
         try:
             summary = poll_once(fetcher, store)
-            fresh = [row for row in summary.inserted if not row["is_backlog"]]
+            fresh = [store.annotate(row) for row in summary.inserted if not row["is_backlog"]]
             for row in fresh:
-                echo(format_headline(store.annotate(row)))
+                # Rotated-in old posts are stored, but they are not news.
+                if not row["old_on_arrival"]:
+                    echo(format_headline(row))
             if summary.backlog:
                 echo(
                     f"(nạp {summary.backlog} tin tồn đọng — xem bằng "
@@ -151,16 +155,21 @@ def watch(
 def recent(
     limit: int = typer.Option(20, min=1, max=500, help="Số tin tối đa."),
     symbol: str = typer.Option(None, help="Chỉ tin gắn nhãn coin này, ví dụ BTCUSDT."),
+    include_old: bool = typer.Option(
+        False, "--all", help="Kể cả tin đã cũ lúc nhận (toà soạn ghi sớm hơn lúc nhận quá 2 giờ)."
+    ),
     config: Path = typer.Option(None, help="Đường dẫn file YAML cấu hình."),
 ) -> None:
     """In các tiêu đề nhận gần nhất, mới nhất trước."""
     _, store = _store(config)
-    rows = store.recent(limit=limit, symbol=symbol.upper() if symbol else None)
+    rows = store.recent(
+        limit=limit, symbol=symbol.upper() if symbol else None, include_old=include_old
+    )
     if not rows:
         where = f" gắn nhãn {symbol.upper()}" if symbol else ""
         safe_echo(
-            f"Chưa có tin nào{where}. Chạy `cryptopred-news poll`, hoặc để scheduler "
-            "chạy (nó quét tin mỗi phút)."
+            f"Chưa có tin mới nào{where}. Chạy `cryptopred-news poll`, hoặc để scheduler "
+            "chạy (nó quét tin mỗi phút). Thêm --all để xem cả tin đã cũ lúc nhận."
         )
         return
     safe_echo(f"{HEADER}\n{TAG_CAVEAT}\n")

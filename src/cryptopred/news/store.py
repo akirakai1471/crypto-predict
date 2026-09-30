@@ -1,7 +1,8 @@
 """SQLite store for headlines, stamped with the moment we first had them.
 
 `received_at` is the timestamp that matters, and it is ours: the UTC clock of
-this machine when the row is first written. The feed's own date is stored
+this machine, read once the feed's bytes are in hand and just before the row is
+first written (one reading per poll pass). The feed's own date is stored
 beside it as `published_at` and never used where point-in-time matters,
 because publishers backdate, re-date on every edit, leave out the zone, or
 report when the draft was opened. Only our own clock can prove a headline was
@@ -34,6 +35,15 @@ from cryptopred.news.tags import DEFAULT_TAGGER, Tagger
 # day is long enough to catch syndication and short enough that a recurring
 # title ("Bitcoin price today") is not suppressed forever.
 DUPLICATE_TITLE_WINDOW = pd.Timedelta(hours=24)
+
+# A headline its own publisher dates this long before we received it was not
+# news when it arrived. Measured on 2026-09-30: Decrypt's feed rotates old
+# video posts in and out of its item list, and a poll fifteen seconds after the
+# first brought twenty of them, dated nine months back, that the first had not
+# listed. The publisher's date is used only in this direction - it can mark a
+# row old, never make a row count earlier or count at all - so a wrong date
+# costs at most one hidden headline.
+OLD_ON_ARRIVAL = pd.Timedelta(hours=2)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS headlines (
@@ -88,6 +98,13 @@ def utc_stamp(ts: datetime | pd.Timestamp) -> str:
         raise ValueError("naive timestamp: a time with no zone cannot be placed")
     stamp = stamp.tz_convert("UTC").ceil("us")
     return stamp.to_pydatetime().isoformat(timespec="microseconds")
+
+
+def old_on_arrival(published_at: str | None, received_at: str) -> bool:
+    """Did the publisher date this more than OLD_ON_ARRIVAL before we had it?"""
+    if not published_at:
+        return False
+    return pd.Timestamp(received_at) - pd.Timestamp(published_at) > OLD_ON_ARRIVAL
 
 
 def _now() -> pd.Timestamp:
@@ -210,18 +227,25 @@ class NewsStore:
         return {
             **row,
             "link": safe_link(row.get("link")),
+            "old_on_arrival": old_on_arrival(row.get("published_at"), row["received_at"]),
             "symbols": list(tags.symbols),
             "high_impact": tags.high_impact,
             "impact_terms": list(tags.impact_terms),
         }
 
     def recent(
-        self, limit: int = 20, symbol: str | None = None, page: int = 500
+        self,
+        limit: int = 20,
+        symbol: str | None = None,
+        include_old: bool = False,
+        page: int = 500,
     ) -> list[dict[str, Any]]:
         """Newest headlines first, tagged, with any alert decision attached.
 
-        Filtering by symbol happens after tagging, since tags are not stored, so
-        this reads pages of rows until it has `limit` matches or runs out.
+        Headlines that were old on arrival are left out unless asked for: a list
+        called "latest news" topped by a nine-month-old video is wrong however
+        it is labelled. Filtering happens after tagging, since tags are not
+        stored, so this reads pages of rows until it has `limit` matches.
         """
         out: list[dict[str, Any]] = []
         offset = 0
@@ -232,7 +256,10 @@ class NewsStore:
                     SELECT h.id, h.uid, h.source, h.title, h.link, h.published_at,
                            h.received_at, h.is_backlog, a.outcome AS alert
                     FROM headlines h LEFT JOIN alerts a ON a.uid = h.uid
-                    ORDER BY h.received_at DESC, h.id DESC LIMIT ? OFFSET ?
+                    -- A pass stamps all its rows alike; within one, the
+                    -- publisher's order is the only order there is. Display only.
+                    ORDER BY h.received_at DESC, h.published_at DESC, h.id DESC
+                    LIMIT ? OFFSET ?
                     """,
                     (page, offset),
                 ).fetchall()
@@ -240,6 +267,8 @@ class NewsStore:
                     break
                 for row in rows:
                     item = self.annotate(dict(row))
+                    if item["old_on_arrival"] and not include_old:
+                        continue
                     if symbol is None or symbol in item["symbols"]:
                         out.append(item)
                 offset += page
@@ -248,18 +277,23 @@ class NewsStore:
     def headlines_frame(self, until: pd.Timestamp | None = None) -> pd.DataFrame:
         """Every headline received at or before `until`, oldest first.
 
-        received_at is parsed to UTC timestamps; published_at is left out on
-        purpose - nothing that reads this frame should be able to reach it.
+        received_at is parsed to UTC timestamps. published_at is reduced to the
+        one-directional old_on_arrival flag and then dropped: nothing that reads
+        this frame can use a publisher's date to place a headline earlier.
         """
-        query = "SELECT received_at, source, title, is_backlog FROM headlines"
+        query = "SELECT received_at, published_at, source, title, is_backlog FROM headlines"
         params: tuple = ()
         if until is not None:
             query += " WHERE received_at <= ?"
             params = (utc_stamp(until),)
         with self._connect() as conn:
             frame = pd.read_sql_query(query + " ORDER BY received_at, id", conn, params=params)
+        frame["old_on_arrival"] = [
+            old_on_arrival(pub, rec)
+            for pub, rec in zip(frame["published_at"], frame["received_at"], strict=True)
+        ]
         frame["received_at"] = _to_utc(frame["received_at"])
-        return frame
+        return frame.drop(columns=["published_at"])
 
     def listening_times(self, until: pd.Timestamp | None = None) -> pd.Series:
         """When a pass completed with at least one feed answering, oldest first."""

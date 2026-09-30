@@ -82,7 +82,9 @@ def test_the_pass_is_stamped_no_earlier_than_anything_it_wrote(tmp_path):
     store = NewsStore(tmp_path / "news.db")
     ticks = iter(pd.date_range("2026-09-30T12:00Z", periods=10, freq="s"))
     poll_once(_fetcher(), store, clock=lambda: next(ticks))
-    newest = max(pd.Timestamp(r["received_at"]) for r in store.recent(limit=50))
+    newest = max(
+        pd.Timestamp(r["received_at"]) for r in store.recent(limit=50, include_old=True)
+    )
     assert pd.Timestamp(store.last_poll()["polled_at"]) >= newest
 
 

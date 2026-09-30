@@ -11,14 +11,9 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 
-from cryptopred.news.alerts import (
-    FRESH_FOR,
-    MAX_PUBLISHER_LAG,
-    alert_fresh_headlines,
-    format_news_alert,
-)
+from cryptopred.news.alerts import FRESH_FOR, alert_fresh_headlines, format_news_alert
 from cryptopred.news.parse import Entry
-from cryptopred.news.store import NewsStore
+from cryptopred.news.store import OLD_ON_ARRIVAL, NewsStore
 from cryptopred.serve.alerts import balloon_parts, read_log
 
 NOW = pd.Timestamp("2026-09-30T12:00:00Z")
@@ -174,7 +169,7 @@ def test_a_headline_received_longer_ago_than_the_fresh_window_is_not_alerted(sto
 def test_a_headline_its_own_publisher_dates_hours_earlier_is_stale(store, tmp_path):
     """Re-surfaced or edited old stories. A publisher date can suppress an alert
     here but never cause one, so a wrong date costs at most a missed message."""
-    published = (NOW - MAX_PUBLISHER_LAG - pd.Timedelta(minutes=1)).to_pydatetime()
+    published = (NOW - OLD_ON_ARRIVAL - pd.Timedelta(minutes=1)).to_pydatetime()
     _add(store, "1", "Bitcoin exchange hacked", published=published)
     outbox = _Outbox()
     assert _run(store, tmp_path, outbox)["stale"] == 1

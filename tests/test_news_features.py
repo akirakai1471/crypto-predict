@@ -158,3 +158,20 @@ def test_news_features_are_not_in_the_training_pipeline():
     """
     feats = build_features(make_ohlcv(n=600, seed=22), interval="1h")
     assert not [c for c in feats.columns if "news" in c.lower()]
+
+
+def test_a_headline_old_on_arrival_is_not_counted_and_does_not_blank_the_window(bars, store):
+    """A nine-month-old post rotated back into a feed is not news flow, but
+    nothing was missed either: drop it, keep the window."""
+    record_listening(store, bars.index[0] - pd.Timedelta(days=1), bars["close_time"].iloc[-1])
+    k = 40
+    at = bars["close_time"].iloc[k] - pd.Timedelta(minutes=10)
+    store.add(
+        [Entry(uid="old", title="Bitcoin ETF video from last winter", link=None,
+               published_at=(at - pd.Timedelta(days=270)).to_pydatetime())],
+        source="Decrypt", received_at=at,
+    )
+    _add(store, "new", "Bitcoin ETF inflows", at)
+    feats = news_features(bars, store, "BTCUSDT")
+    assert feats["news_tagged_1h"].iloc[k] == 1
+    assert feats["news_high_impact_1h"].iloc[k] == 1

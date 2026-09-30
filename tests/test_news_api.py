@@ -108,3 +108,16 @@ def test_the_dashboard_has_the_news_section_and_escapes_it(cfg):
     assert 'target="_blank"' in page
     assert "escapeHtml(n.title)" in page
     assert "safeHref(n.link)" in page
+
+
+def test_headlines_old_on_arrival_are_hidden_unless_asked_for(cfg):
+    store = NewsStore(cfg.data.root / "news.db")
+    store.add(
+        [Entry(uid="old", title="Old video", link=None,
+               published_at=(T0 - pd.Timedelta(days=9)).to_pydatetime())],
+        source="Decrypt", received_at=T0,
+    )
+    client = TestClient(create_app(cfg))
+    assert client.get("/api/news").json()["items"] == []
+    (item,) = client.get("/api/news?include_old=true").json()["items"]
+    assert item["old_on_arrival"] is True

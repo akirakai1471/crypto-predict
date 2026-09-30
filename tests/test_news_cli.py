@@ -63,7 +63,11 @@ def test_poll_prints_per_feed_counts_and_survives_a_dead_feed(config, tmp_path):
 
 def test_recent_prints_newest_first_with_the_caveat(config):
     runner.invoke(cli.app, ["poll", "--config", str(config)])
-    result = runner.invoke(cli.app, ["recent", "--config", str(config), "--limit", "2"])
+    # --all: the fixture's items are dated 2026-09-29, so against the real
+    # clock they are old on arrival and hidden by default.
+    result = runner.invoke(
+        cli.app, ["recent", "--config", str(config), "--limit", "2", "--all"]
+    )
     assert result.exit_code == 0, result.output
     assert "QUY ƯỚC — CHƯA KIỂM CHỨNG" in result.output
     assert "NHẬN tin (UTC)" in result.output
@@ -72,7 +76,9 @@ def test_recent_prints_newest_first_with_the_caveat(config):
 
 def test_recent_filters_by_symbol(config):
     runner.invoke(cli.app, ["poll", "--config", str(config)])
-    result = runner.invoke(cli.app, ["recent", "--config", str(config), "--symbol", "ethusdt"])
+    result = runner.invoke(
+        cli.app, ["recent", "--config", str(config), "--symbol", "ethusdt", "--all"]
+    )
     assert "Ethereum developers set date" in result.output
     assert "Spot Bitcoin ETF" not in result.output
 
@@ -144,3 +150,26 @@ def test_a_headline_line_marks_tags_and_impact_as_questions():
     }
     line = cli.format_headline(row)
     assert line.startswith("2026-09-30 12:34 UTC · Example · ETHUSDT · TÁC ĐỘNG CAO?")
+
+
+def test_recent_hides_headlines_that_were_old_when_they_arrived(tmp_path):
+    """Decrypt's feed rotates months-old posts back in. Listed under "latest
+    news" by the time we received them, they would top the list."""
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(f"data:\n  root: {tmp_path.as_posix()}\n", encoding="utf-8")
+    store = NewsStore(tmp_path / "news.db")
+    now = pd.Timestamp.now(tz="UTC")
+    store.add(
+        [Entry(uid="old", title="Old video post", link=None,
+               published_at=(now - pd.Timedelta(days=270)).to_pydatetime())],
+        source="Decrypt", received_at=now,
+    )
+    store.add(
+        [Entry(uid="new", title="Fresh story", link=None,
+               published_at=(now - pd.Timedelta(minutes=5)).to_pydatetime())],
+        source="CoinDesk", received_at=now,
+    )
+    default = runner.invoke(cli.app, ["recent", "--config", str(cfg)]).output
+    everything = runner.invoke(cli.app, ["recent", "--config", str(cfg), "--all"]).output
+    assert "Fresh story" in default and "Old video post" not in default
+    assert "Old video post" in everything and "cũ lúc nhận" in everything
