@@ -478,8 +478,21 @@ Vì sao phải khắt khe vậy: chạy thử trên 4 coin **dữ liệu ngẫu 
 thuần tuý vì dữ liệu không có gì để đoán. Chỉ nhìn con số trung bình là sẽ nhận
 nhầm. Ba điều kiện còn lại đã loại nó.
 
-Kết quả thật, dù đạt hay trượt, sẽ được ghi vào `docs/findings.md`. Không phương
-án nào thay đổi model đang chạy cho tới khi qua luật đó và được train lại bằng tay.
+**Kết quả thật (30/09/2026, 20 coin, 1,05 triệu nến): cả hai bị loại.**
+
+| | baseline | recency | market_context |
+|---|---|---|---|
+| Đúng hướng TB (8% nến giao dịch) | **54,44%** | 53,79% | 54,60% |
+| Thắng baseline | — | 9/20 | 12/20 (cần 15) |
+| Kết luận | | **LOẠI** — tệ hơn | **LOẠI** — không đo được cải thiện |
+
+`market_context` cải thiện log loss (1,0170 so với 1,0208) nhưng không cải thiện
+đúng thứ chiến lược giao dịch; nhận nó bây giờ là chọn tiêu chí sau khi thấy kết
+quả. Chi tiết và bảng từng coin trong `docs/findings.md`. Mặc định giữ nguyên.
+
+Điều đáng chú ý nhất lại là baseline: **20/20 coin đúng hướng trên 50%** ở những
+nến nó chọn giao dịch — nhưng 20 coin crypto tương quan mạnh, không phải 20 phép
+thử độc lập.
 
 ## Kiểm chứng trên 20 coin — cấu hình đóng băng
 

@@ -213,6 +213,90 @@ passed both gates (+50.1% after costs, −16.6% drawdown, +18.4% at doubled
 costs, coverage 4.90% against an 8% target — still firing light, in the same
 direction as the drift).
 
+## Two ways to follow the market faster: both rejected
+
+Date: 2026-09-30. Criteria in `docs/preregistration-improvements.md`, committed
+(67b7b15) before the code that runs it touched real data. Run at 42aee27 on
+hourly bars from `data.binance.vision`, 2020-01 to 2026-08, twenty symbols,
+1.05M bars; all three arms in one invocation, 60 runs.
+
+The request behind it was a "more sensitive, more accurate" model. The testable
+version: adapt faster when the market changes, while still trading the same 8%
+of bars. Two changes, one pre-chosen value each.
+
+Sign accuracy on the traded bars:
+
+| symbol | baseline | recency | market_context |
+|---|---|---|---|
+| BTCUSDT | 55.76% | 54.88% | 56.25% |
+| ETHUSDT | 55.40% | 51.89% | 52.28% |
+| SOLUSDT | 51.45% | 50.63% | 53.96% |
+| XRPUSDT | 55.38% | 53.11% | 55.51% |
+| ADAUSDT | 57.09% | 57.46% | 57.59% |
+| DOGEUSDT | 55.99% | 56.19% | 56.75% |
+| AVAXUSDT | 52.54% | 55.26% | 54.59% |
+| LINKUSDT | 55.52% | 52.88% | 56.91% |
+| DOTUSDT | 54.44% | 56.08% | 53.31% |
+| LTCUSDT | 54.20% | 54.56% | 52.55% |
+| BCHUSDT | 55.86% | 56.57% | 57.30% |
+| ATOMUSDT | 51.07% | 50.52% | 49.96% |
+| NEARUSDT | 52.41% | 50.37% | 51.97% |
+| APTUSDT | 55.02% | 55.38% | 54.34% |
+| ARBUSDT | 53.37% | 52.70% | 53.98% |
+| OPUSDT | 54.79% | 55.86% | 56.36% |
+| FILUSDT | 57.51% | 52.71% | 56.95% |
+| INJUSDT | 51.08% | 50.74% | 51.65% |
+| TRXUSDT | 53.55% | 53.60% | 53.92% |
+| ETCUSDT | 56.44% | 54.45% | 55.94% |
+| **mean** | **54.44%** | 53.79% | 54.60% |
+
+| rule | recency | market_context |
+|---|---|---|
+| 1. better on ≥15 of 20, sign test α 0.025 | **FAIL** 9/20, p 0.75 | **FAIL** 12/20, p 0.25 |
+| 2. mean gain ≥ +0.5pp | **FAIL** −0.65pp | **FAIL** +0.16pp |
+| 3. no gate passes lost | pass (5 vs 5) | pass (8 vs 5) |
+| 4. log loss not worse | pass (1.0206 vs 1.0208) | pass (1.0170 vs 1.0208) |
+| **verdict** | **REJECTED** | **REJECTED** |
+
+**Recency weighting made things worse.** Nine symbols of twenty improved, the
+mean fell 0.65pp, and FIL lost 4.8pp. Halving the weight of year-old rows
+throws away more information than faster adaptation gains back — a plausible
+mechanism (a one-year half-life over a six-year window cuts the effective
+sample substantially), not a measured one.
+
+**Market context is the more instructive failure.** On the metric the strategy
+trades on it did nothing measurable: +0.16pp mean, 12 of 20, while the
+per-symbol differences have a standard deviation of 1.35pp. It did improve two
+things the rule only checks do not get worse — log loss (1.0170 against
+1.0208) and gate passes (8 symbols against 5). Neither rescues it, and neither
+should be read as a finding:
+
+- Gate passes are close to a coin flip per symbol. "Twenty symbols" below
+  records that re-running the frozen configuration changed which symbols
+  passed almost completely (4 of 7 in common). Five against eight is inside
+  that.
+- A log-loss gain means better probabilities across all bars. The trading rule
+  ranks bars by directional margin and takes the top 8%, so a better
+  probability only reaches the strategy if it changes that ranking — and on
+  those bars, it did not.
+
+If the log-loss improvement is worth pursuing, it needs its own pre-registration
+with log loss as the primary metric and a stated use for better probabilities.
+Adopting market context now, on criteria picked after seeing this table, is
+exactly what the pre-registration exists to prevent.
+
+**What the baseline says on its own.** 54.44% mean sign accuracy on the traded
+bars, and all twenty symbols above 50% — the strongest cross-symbol showing so
+far (53.98% and 18/20 in "Twenty symbols"). The usual caveat applies with full
+force: twenty correlated symbols over one period are not twenty tests. Five of
+twenty pass all three gates, against seven and six in earlier runs.
+
+**Decision.** Defaults unchanged; nothing in the served model changes. Two
+principled ways to make the model more responsive to the market did not improve
+it, and this project's measured ceiling for hourly direction remains about
+54–55% on the bars it chooses to trade. That is the honest answer to "make it
+close to perfect".
+
 ## The touch-probability interval, second pass: 85%, and where it still fails
 
 Date: 2026-09-30. The section below ended with "closing the remaining gap —
