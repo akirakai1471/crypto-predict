@@ -323,8 +323,9 @@ có khớp ~63% không, việc chấm điểm có chạy không.
 Scheduler quét RSS của **CoinDesk, Cointelegraph, Decrypt, The Block và Bitcoin
 Magazine** mỗi 60 giây, lưu vào `data/news.db` và hiện ở mục **Tin mới** trên
 dashboard. Mỗi lượt gửi lại ETag/Last-Modified của lần trước (conditional GET),
-nên feed không đổi chỉ tốn một phản hồi 304 — với toà soạn nào có gửi hai header
-đó; chưa kiểm được với feed thật. Một nguồn chết không chặn các nguồn còn lại.
+nên feed không đổi chỉ tốn một phản hồi 304 — đo ngày 30/09/2026: Cointelegraph
+và The Block trả 304 thật; CoinDesk không gửi header nào nên mỗi phút tải lại
+~30 KB. Một nguồn chết không chặn các nguồn còn lại.
 
 **Nhanh tới đâu.** Tin tới tay bạn sau: độ trễ của toà soạn khi đưa bài vào RSS
 (thường tính bằng phút — **chưa đo**) + tối đa 60 giây chờ lượt quét + tối đa 60
@@ -336,11 +337,21 @@ không phải giờ toà soạn ghi. Toà soạn lùi giờ, sửa bài là đ�
 ghi múi giờ — chỉ đồng hồ của chính mình mới chứng minh được một tin đã có trước
 khi nến đóng.
 
+**Tin cũ bị ẩn.** Feed của Decrypt xoay vòng bài cũ: một lượt quét 15 giây sau
+lượt đầu mang về 20 bài video từ 9 tháng trước. Tin mà chính toà soạn ghi sớm hơn
+lúc nhận quá 2 giờ vẫn được lưu, nhưng không hiện ở "Tin mới", không được báo,
+không được đếm vào feature. Xem cả tin cũ: `cryptopred-news recent --all`. Vì
+vậy lần đầu bật scheduler, "Tin mới" chỉ có vài tin của 2 giờ gần nhất — phần
+còn lại của RSS là tin cũ.
+
 **Mạng phải cho phép** (HTTPS, cổng 443): `www.coindesk.com`, `cointelegraph.com`,
 `decrypt.co`, `www.theblock.co`, `bitcoinmagazine.com`. Feed nào chuyển hướng
-sang host khác thì phải mở cả host đó. Pipeline chưa chạy với feed thật lần nào
-— môi trường phát triển chặn mọi trang tin, nên mọi thứ được kiểm bằng feed mẫu.
-Lần chạy thật đầu tiên, gõ `uv run cryptopred-news poll` và xem cột lỗi.
+sang host khác thì phải mở cả host đó; chuyển hướng từ https sang http thường bị
+từ chối (địa chỉ feed cũ của Bitcoin Magazine làm đúng việc đó, nên cấu hình dùng
+địa chỉ đích). Đã chạy thử với cả 5 feed thật ngày 30/09/2026: 5/5 trả lời, lượt
+đầu nạp 121 tin. Mạng của môi trường phát triển lúc chặn lúc mở, nên phần lớn
+test dùng feed mẫu. Lần đầu chạy trên máy bạn, gõ `uv run cryptopred-news poll`
+và xem cột lỗi.
 
 **Vì sao chưa đưa vào model.** RSS miễn phí chỉ giữ vài ngày, nên **không có lịch
 sử để kiểm**. Một feature tin phải qua đúng các cổng walk-forward mà mọi feature
@@ -379,7 +390,7 @@ màn hình, không gửi thông báo, để một tin không bị báo hai lần
 uv run pytest
 ```
 
-761 test, chạy hoàn toàn offline (5 test cần kho dữ liệu thật sẽ tự bỏ qua nếu
+772 test, chạy hoàn toàn offline (5 test cần kho dữ liệu thật sẽ tự bỏ qua nếu
 chưa tải). Quan trọng nhất là `tests/test_leakage.py`:
 6 test chặn rò rỉ dữ liệu tương lai. **Nếu bộ này đỏ, mọi con số trong dự án đều
 vô nghĩa** — sửa rò rỉ trước, đừng train.
