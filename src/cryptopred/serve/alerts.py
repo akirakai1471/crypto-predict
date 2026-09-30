@@ -36,18 +36,26 @@ def should_alert(
     signal: int,
     bar_close_time: pd.Timestamp,
     history: pd.DataFrame,
-    horizon_hours: int,
+    horizon_hours: float,
 ) -> bool:
     """Is this signal the start of a new episode rather than a repeat?
 
     A same-direction signal inside the horizon is the same view held one bar
     longer: the position it opens overlaps the one already open. A flip is new
     information whenever it arrives.
+
+    Only signals strictly before this bar count as history. The scheduler
+    records a prediction before it considers alerting on it, so the log it
+    passes in already holds this very row - and a signal compared against
+    itself is always "inside the horizon", which silenced every alert.
     """
     if signal == 0:
         return False
 
+    now = pd.Timestamp(bar_close_time).tz_convert("UTC")
     prior = _signals(history)
+    if not prior.empty:
+        prior = prior[prior["t"] < now]
     if prior.empty:
         # An empty frame may carry no columns at all, so this guard has to come
         # before any column is indexed.
@@ -58,7 +66,6 @@ def should_alert(
         return True
 
     last = same["t"].iloc[-1]
-    now = pd.Timestamp(bar_close_time).tz_convert("UTC")
     return (now - last) >= pd.Timedelta(hours=horizon_hours)
 
 
