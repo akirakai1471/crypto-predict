@@ -213,6 +213,120 @@ passed both gates (+50.1% after costs, −16.6% drawdown, +18.4% at doubled
 costs, coverage 4.90% against an 8% target — still firing light, in the same
 direction as the drift).
 
+## BTCUSDT retrained on the archive data: NO-GO on both verdicts, and long-only
+
+Date: 2026-09-30. `cryptopred-model train --symbol BTCUSDT` on 57,673 hourly
+rows from 2020-01-31 to 2026-08-30 (`data.binance.vision`), not saved.
+
+| verdict | result |
+|---|---|
+| classification | **NO-GO** — Brier 0.6314 against the prior's 0.6279 (beats always-up on direction, CI [+1.3, +3.1]pp) |
+| strategy | **NO-GO** — −4.2% after costs, −23.5% at doubled costs, Sharpe −0.01, 3,844 trades at 51.7% |
+
+Seven days earlier the same configuration passed both gates at +50.1%. **The
+code is not the difference**: the pre-merge code (063ece1) run on this dataset
+produced a report identical line for line. What changed is the window — the
+archive starts at 2020-01 rather than 2019-09 and ends 2026-08-30 rather than
+2026-09-23 — and a window shift moves every fold boundary. A result that goes
+from +50% to −4% with a few months at the edges was never measuring something
+stable. "Do not read any return figure more precisely than a factor of two" is
+written above; this is a factor of infinity.
+
+**Rule 5 check.** The report's per-fold directional accuracy showed 60.8% in
+fold 3 (2024-06 to 2025-07). That figure uses the withdrawn 0.50 threshold,
+which here selected 65.3% of fold 0 and 1.7% of fold 3 — 166 signals — the
+calibration artefact recorded at the top of this document. Under the rank rule
+that is actually traded, fold 3 is still 62.9% on 769 trades, so it was checked
+properly:
+
+| fold | long share of trades | P(24h up), all bars | P(24h up), traded bars |
+|---|---|---|---|
+| 0 | 99.5% | 50.5% | 54.7% |
+| 1 | 99.5% | 48.6% | 58.4% |
+| 2 | 99.7% | 53.2% | 56.3% |
+| 3 | 99.9% | 53.0% | 62.8% |
+| 4 | 96.1% | 50.4% | 54.7% |
+
+Not a leak: fold 3's accuracy is the share of its selected bars that rose,
+because it traded long 768 times out of 769 in a market that went from 65k to
+118k. What the model does know is also in the table: in every fold, including
+the falling one, the bars it picks rise more often than the fold as a whole —
+by 3 to 10 points. That is timing skill on the long side. It is also, by
+construction, one-sided, which is exactly what the two-sided gate refuses.
+
+**Decision.** Not saved. The model in the live registry (trained 2026-09-23) is
+not replaced from here, and should not be replaced on this evidence either way:
+the forward log is the only test this window-sensitivity cannot fake.
+
+## Choosing trades by expected move: rejected, and the most promising failure yet
+
+Date: 2026-09-30. Criteria in `docs/preregistration-cost-aware-selection.md`
+(8dfc78c), committed before the rule ran. Run at 8f26979 on the same twenty
+symbols and archive data as the section below. Each symbol trained once; both
+rules picked the top 8% per fold from the same out-of-sample probabilities, so
+the selection rule is the only difference.
+
+| symbol | 2x-cost return | | Sharpe | | two-sided? | |
+|---|---|---|---|---|---|---|
+| | margin | **× vol72** | margin | **× vol72** | margin | **× vol72** |
+| BTCUSDT | −18.3% | −5.1% | −0.03 | 0.16 | ONE | ONE |
+| ETHUSDT | −17.9% | −54.2% | 0.02 | −0.24 | TWO | TWO |
+| SOLUSDT | −11.4% | −22.4% | 0.12 | 0.11 | ONE | ONE |
+| XRPUSDT | −29.7% | +3.0% | −0.17 | 0.23 | ONE | ONE |
+| ADAUSDT | +67.6% | +86.6% | 0.58 | 0.57 | TWO | TWO |
+| DOGEUSDT | +16.9% | −49.8% | 0.35 | −0.17 | ONE | ONE |
+| AVAXUSDT | −12.2% | −13.5% | 0.08 | 0.15 | TWO | ONE |
+| LINKUSDT | +43.6% | +85.1% | 0.53 | 0.57 | TWO | TWO |
+| DOTUSDT | −17.9% | +58.7% | −0.04 | 0.56 | TWO | TWO |
+| LTCUSDT | −26.0% | +78.5% | −0.12 | 0.53 | TWO | TWO |
+| BCHUSDT | −29.2% | −52.4% | −0.11 | −0.07 | ONE | ONE |
+| ATOMUSDT | −28.7% | +15.0% | −0.07 | 0.30 | TWO | ONE |
+| NEARUSDT | −28.3% | −52.8% | −0.14 | −0.20 | ONE | ONE |
+| APTUSDT | −4.9% | +1.3% | 0.12 | 0.22 | ONE | TWO |
+| ARBUSDT | −17.0% | +7.3% | −0.13 | 0.29 | TWO | TWO |
+| OPUSDT | +37.2% | +29.6% | 0.69 | 0.50 | TWO | TWO |
+| FILUSDT | −23.8% | −65.1% | −0.01 | −0.41 | ONE | ONE |
+| INJUSDT | +27.7% | +139.2% | 0.56 | 1.05 | TWO | ONE |
+| TRXUSDT | −51.4% | −25.5% | −0.76 | 0.04 | UNPROVEN | UNPROVEN |
+| ETCUSDT | +57.9% | +74.9% | 0.60 | 0.53 | TWO | TWO |
+
+| rule | result |
+|---|---|
+| 1. better at doubled costs on ≥15 of 20, p ≤ 0.05 | **FAIL** — 12/20, p 0.25 |
+| 2. mean Sharpe not lower | pass — 0.235 vs 0.104 |
+| 3. no gate passes lost | pass — 8 vs 5 |
+| 4. no fewer TWO-SIDED symbols | **FAIL** — 9 vs 11 |
+| **verdict** | **REJECTED** |
+
+**What the rule got right.** Past volatility does predict the next day's
+move: the bars it picked moved more on all 20 symbols, 4.47% against 3.41% on
+average. That part of the hypothesis holds, and it holds everywhere.
+
+**Why it is still rejected.** Bigger moves amplify whatever the model does on
+that symbol, in both directions. The per-symbol change at doubled costs ranges
+from −66.7 to +111.5 points, with a standard deviation of 46: LTC, DOT and INJ
+gained 76–112 points while ETH, DOGE, FIL, BCH and NEAR lost 23–67. Twelve
+winners of twenty is what that spread produces by chance. And the fear written
+into criterion 4 came true in part: three symbols went from two-sided to
+one-sided (AVAX, ATOM, INJ), one the other way (APT). Volatile bars in crypto
+are disproportionately crashes and rallies.
+
+**The aggregates look better, and that is exactly the trap.** Mean doubled-cost
+return +11.9% against −3.3%, median +2.1% against −17.4%, 11 symbols positive
+against 6, mean Sharpe more than doubled, mean sign accuracy 55.18% against
+54.44%. Every one of these is dominated by a few large per-symbol swings, and
+none of them was the pre-registered criterion. Choosing any of them now, after
+seeing the table, is choosing the test the result happens to pass.
+
+**What would test it honestly.** This data has now been used to generate the
+hypothesis that volatility-ranked selection helps on average. It cannot also
+confirm it. The clean test is data that did not exist when this was run: the
+months after 2026-08, per symbol, with the same frozen rule and the criteria
+above. That is a pre-registration to write before those months arrive, not a
+reason to adopt the rule now.
+
+**Decision.** Defaults unchanged; the served model is unchanged.
+
 ## Two ways to follow the market faster: both rejected
 
 Date: 2026-09-30. Criteria in `docs/preregistration-improvements.md`, committed
