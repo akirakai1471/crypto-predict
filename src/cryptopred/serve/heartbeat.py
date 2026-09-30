@@ -37,6 +37,28 @@ def write(path: Path, interval: str, counts: dict[str, int]) -> None:
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     except OSError:
         pass
+    ping_external()
+
+
+def ping_external(timeout: float = 5.0, transport=None) -> bool:
+    """Tell an outside dead-man's switch that a cycle finished.
+
+    Everything else here watches the scheduler from the same machine, so it
+    goes quiet exactly when the machine does - a VPS that is down sends no
+    alert about being down. A service such as healthchecks.io, given
+    HEALTHCHECK_PING_URL, expects a ping every hour and alerts when one does not
+    arrive. Unset means off. Never raises.
+    """
+    url = os.environ.get("HEALTHCHECK_PING_URL", "").strip()
+    if not url:
+        return False
+    try:
+        import httpx
+
+        with httpx.Client(timeout=timeout, transport=transport) as client:
+            return client.get(url).status_code < 400
+    except Exception:  # noqa: BLE001 - the ping must never cost the cycle
+        return False
 
 
 def read(path: Path) -> dict[str, Any] | None:

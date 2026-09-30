@@ -1,0 +1,15 @@
+# Keep the build context to what the image needs. data/ alone is ~100 MB and
+# holds the live log, which belongs in the volume, never in an image.
+.git
+.venv
+venv
+data
+tests
+docs
+scripts
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.env
+*.bat
