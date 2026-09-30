@@ -23,6 +23,7 @@ from cryptopred.models.registry import ModelRegistry
 from cryptopred.paper.trader import PaperTrader
 from cryptopred.serve import heartbeat
 from cryptopred.serve.drift import coverage_drift, format_drift
+from cryptopred.serve.freshness import funding_freshness
 from cryptopred.serve.store import PredictionStore
 
 # Below this many scored signals, a hit rate is noise dressed as a result.
@@ -127,6 +128,7 @@ def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
                 "paper": trader.summary(symbol),
                 "model_version": version,
                 "drift": drift,
+                "funding": funding_freshness(parquet, symbol),
             }
         )
 
@@ -158,6 +160,24 @@ def format_status(status: dict[str, Any], backtest_reference: float = 0.589) -> 
             "  Nothing new is being recorded. Run run.bat and leave both windows open."
         )
 
+    # An input that stopped updating is checked before the model is judged:
+    # predictions made on frozen features say nothing about the model.
+    frozen = [
+        s for s in status["symbols"]
+        if s.get("funding", {}).get("state") in ("stale", "missing")
+    ]
+    if frozen:
+        lines += ["", "-" * 78]
+        for s in frozen:
+            lines.append(f"  {s['symbol']} funding: {s['funding']['detail']}")
+        lines.append(
+            "  The model is reading funding that is not current. The scheduler fetches"
+        )
+        lines.append(
+            "  it every cycle - if this persists, read the scheduler's log, or run"
+        )
+        lines.append("  `cryptopred-ingest funding` by hand.")
+
     broken = [
         s for s in status["symbols"] if s.get("drift", {}).get("state") in ("silent", "drifted")
     ]
@@ -168,10 +188,16 @@ def format_status(status: dict[str, Any], backtest_reference: float = 0.589) -> 
         lines.append(
             "  The saved rule does not match how the model behaves on this market."
         )
-        lines.append(
-            "  Retrain: python -m cryptopred.models.cli train --symbol "
-            f"{broken[0]['symbol']} --interval {status['interval']} --save"
-        )
+        # This used to print the retrain command, --save included. The first
+        # time it fired after a fix, the window was bars predicted on frozen
+        # funding - a retrain then would have fitted a diagnosis of the bug.
+        lines += [
+            "  Do NOT retrain on this line alone. First make sure the window is clean:",
+            "  bars predicted with stale inputs (funding above) or before a fix say",
+            "  nothing about the model. Wait for ~60 bars predicted since the last",
+            "  change, then run check-model.bat and read BOTH verdict lines. Save a new",
+            "  model by hand only if both say GO.",
+        ]
 
     if not status["symbols"]:
         lines += ["", "Nothing recorded yet.", "=" * 78]
@@ -183,6 +209,8 @@ def format_status(status: dict[str, Any], backtest_reference: float = 0.589) -> 
             "",
             f"{s['symbol']} — {s['n_predictions']:,} predictions over {span}",
             f"  model:              {s.get('model_version') or 'none saved'}",
+            f"  funding:            {s['funding']['state'].upper()} — "
+            f"{s['funding']['detail']}",
             f"  {format_drift(s['drift'])}",
             f"  scored so far:      {s['n_scored']:,} of {s['n_live']:,} live rows "
             "(the rest are waiting for their horizon)",

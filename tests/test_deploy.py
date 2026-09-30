@@ -183,7 +183,10 @@ def test_doctor_passes_a_reachable_machine_and_warns_about_a_missing_model(tmp_p
     by_name = {c.name: c for c in checks}
     assert by_name["Binance futures API"].state == "ok"
     assert by_name["model BTCUSDT"].state == "warn"
-    assert doctor.healthy(checks)  # a missing model is a warning, not a blocker
+    # A fresh machine has no funding yet; the first cycle fetches it.
+    assert by_name["funding BTCUSDT"].state == "warn"
+    assert "chu kỳ đầu" in by_name["funding BTCUSDT"].detail
+    assert doctor.healthy(checks)  # missing model or funding warns, never blocks
 
 
 def test_doctor_can_send_a_telegram_test(tmp_path, monkeypatch):

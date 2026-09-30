@@ -21,9 +21,11 @@ import httpx
 
 from cryptopred.config import Config
 from cryptopred.ingest.binance import FUTURES_BASE
+from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.news.fetch import USER_AGENT
 from cryptopred.serve import telegram
+from cryptopred.serve.freshness import funding_freshness
 
 
 @dataclass
@@ -90,6 +92,27 @@ def _models(cfg: Config) -> list[Check]:
     return out
 
 
+def _funding(cfg: Config) -> list[Check]:
+    """Funding the predictor will read. Missing on a fresh machine is expected -
+    the first cycle fetches it - so this warns rather than fails."""
+    parquet = ParquetStore(cfg.data.root / "raw")
+    out = []
+    for symbol in cfg.data.symbols:
+        fresh = funding_freshness(parquet, symbol)
+        state = "ok" if fresh["state"] == "fresh" else "warn"
+        if fresh["state"] == "missing":
+            detail = "chưa có - chu kỳ đầu tiên của scheduler sẽ tải"
+        elif fresh["state"] == "stale":
+            detail = (
+                f"CŨ: {fresh['hours']:.0f} giờ (giới hạn 9) - model đang đọc funding "
+                "đóng băng; xem log của scheduler"
+            )
+        else:
+            detail = f"cập nhật cách {fresh['hours']:.1f} giờ"
+        out.append(Check(f"funding {symbol}", state, detail))
+    return out
+
+
 def _feeds(cfg: Config, transport: httpx.BaseTransport | None) -> Check:
     if not cfg.news.feeds:
         return Check("nguồn tin", "warn", "không cấu hình nguồn nào")
@@ -151,6 +174,7 @@ def run_checks(
         _data_dir(cfg),
         _binance(cfg, binance_transport),
         *_models(cfg),
+        *_funding(cfg),
         _feeds(cfg, web_transport),
         _telegram(send_test, web_transport),
         _external_ping(),
