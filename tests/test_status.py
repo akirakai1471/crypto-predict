@@ -152,3 +152,55 @@ def test_backfilled_rows_are_excluded_from_the_headline_rate(cfg):
     text = format_status(collect(cfg))
     assert "backfilled" in text
     assert "cannot prove" in text
+
+
+# -- funding freshness, and what drift is allowed to recommend ------------------
+
+
+def _funding_at(cfg, hours_ago):
+    t = pd.Timestamp.now(tz="UTC").floor("s") - pd.Timedelta(hours=hours_ago)
+    frame = pd.DataFrame(
+        {"funding_rate": [0.0001]}, index=pd.DatetimeIndex([t], name="funding_time")
+    )
+    ParquetStore(cfg.data.root / "raw").write("funding", "BTCUSDT", "8h", frame)
+
+
+def test_frozen_funding_is_named_before_anything_else_is_judged(cfg):
+    """176 hours old on the live machine on 2026-09-30, and nothing said so."""
+    _log(cfg, n_signals=3, n_correct=2)
+    _funding_at(cfg, 176)
+    text = format_status(collect(cfg))
+    assert "BTCUSDT funding: last rate 176" in text
+    assert "not current" in text
+    assert "funding:            STALE" in text
+
+
+def test_current_funding_raises_no_alarm(cfg):
+    _log(cfg, n_signals=3, n_correct=2)
+    _funding_at(cfg, 2)
+    text = format_status(collect(cfg))
+    assert "funding:            FRESH" in text
+    assert "not current" not in text
+
+
+def test_no_funding_at_all_is_reported_missing(tmp_path):
+    from cryptopred.serve.freshness import funding_freshness
+
+    assert funding_freshness(ParquetStore(tmp_path), "BTCUSDT")["state"] == "missing"
+
+
+def test_drift_never_hands_over_a_retrain_command(cfg):
+    """It used to print `train ... --save`. The first time it fired after a fix,
+    its window was bars predicted on frozen funding: following it would have
+    fitted a new model to a diagnosis of the bug."""
+    _log(cfg, n_signals=3, n_correct=2)
+    status = collect(cfg)
+    status["symbols"][0]["drift"] = {
+        "state": "drifted",
+        "detail": "fires on 3.2% of the last 189 bars against a 8% target (2.5x)",
+    }
+    text = format_status(status)
+    assert "3.2%" in text
+    assert "--save" not in text
+    assert "Do NOT retrain on this line alone" in text
+    assert "BOTH verdict lines" in text
