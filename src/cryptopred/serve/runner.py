@@ -12,7 +12,7 @@ import pandas as pd
 
 from cryptopred.config import Config
 from cryptopred.ingest.binance import BinanceClient
-from cryptopred.ingest.cli import run_klines_ingest
+from cryptopred.ingest.cli import run_funding_ingest, run_klines_ingest
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.paper.trader import PaperTrader
 from cryptopred.serve import heartbeat
@@ -45,12 +45,19 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
         "filled": 0, "chased": 0, "cancelled": 0, "pending": 0,
         "backfilled": 0,
         "alerts": 0,
+        "funding": 0,
     }
 
     sync_cfg = cfg.model_copy(deep=True)
     sync_cfg.data.intervals = [interval]
     with BinanceClient() as client:
         counts["bars"] = run_klines_ingest(sync_cfg, client, parquet)
+        # The model is trained with funding features and the predictor reads
+        # them from this store. Without a refresh here they froze at the last
+        # manual `ingest funding`: funding_ma_21 - the top feature by gain -
+        # stopped moving, and hours_since_funding climbed into the hundreds
+        # against a training maximum of 8. One request per symbol per cycle.
+        counts["funding"] = run_funding_ingest(sync_cfg, client, parquet)
 
     for symbol in cfg.data.symbols:
         try:

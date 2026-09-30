@@ -56,6 +56,35 @@ def status(
     typer.echo(format_status(collect(cfg, interval=interval)))
 
 
+@app.command()
+def doctor(
+    send_test: bool = typer.Option(
+        False, "--send-test", help="Also send a Telegram test message."
+    ),
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+) -> None:
+    """Check this machine can run unattended: Binance, models, data, alerts."""
+    from cryptopred.serve.doctor import format_checks, healthy, run_checks
+
+    checks = run_checks(load_config(config), send_test=send_test)
+    safe_echo(format_checks(checks))
+    raise typer.Exit(code=0 if healthy(checks) else 1)
+
+
+@app.command()
+def health(config: Path = typer.Option(None, help="Path to a YAML config file.")) -> None:
+    """Exit 0 if the scheduler finished a cycle recently, 1 otherwise.
+
+    For container health checks: the same heartbeat test the status report
+    and the dashboard use, as an exit code.
+    """
+    from cryptopred.serve import heartbeat
+
+    beat = heartbeat.status(load_config(config).data.root / "heartbeat.json")
+    typer.echo(beat["detail"])
+    raise typer.Exit(code=0 if beat["state"] == "alive" else 1)
+
+
 def _news_job(cfg: Config):
     """The news poller, or None if it cannot start.
 
@@ -154,8 +183,28 @@ def schedule(
             f"Tin tức: quét {len(cfg.news.feeds)} nguồn RSS mỗi {cfg.news.poll_seconds} giây "
             "— chỉ để xem, model không dùng tin."
         )
-    run_cycle(cfg, interval=interval)  # run once immediately so the log is current
+    first_cycle(cfg, interval)  # run once immediately so the log is current
     scheduler.start()
+
+
+def first_cycle(cfg: Config, interval: str) -> bool:
+    """The immediate cycle at start-up, which must not be able to stop the start.
+
+    Scheduled cycles are wrapped by APScheduler, so one that fails is logged and
+    the next hour tries again. This one ran bare: a network blip or an HTTP 451
+    at start-up killed the process before the scheduler existed, and under a
+    restart policy that became a crash loop re-requesting years of bars every
+    few seconds. Now it is logged, and the hourly job carries on.
+    """
+    try:
+        run_cycle(cfg, interval=interval)
+        return True
+    except Exception:  # noqa: BLE001 - the scheduled job is the retry
+        logger.exception(
+            "the start-up cycle failed; the scheduler starts anyway and the next "
+            "hourly cycle will retry. `cryptopred-serve doctor` checks the usual causes."
+        )
+        return False
 
 
 if __name__ == "__main__":

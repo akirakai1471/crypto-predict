@@ -213,6 +213,38 @@ passed both gates (+50.1% after costs, −16.6% drawdown, +18.4% at doubled
 costs, coverage 4.90% against an 8% target — still firing light, in the same
 direction as the drift).
 
+## The live model has been predicting with stale funding
+
+Date: 2026-09-30, found while packaging the scheduler for a server.
+
+The model trains on five funding features, and the live predictor reads them
+from the local store. The scheduler cycle refreshed bars every hour and funding
+**never**. Funding moved only when someone ran `ingest funding` by hand or the
+monthly `check-model.bat` ran it. In between, `funding_ma_21` — the top feature
+by gain in today's BTC retrain — stood still, and `hours_since_funding` climbed
+past anything the model had seen: training rows never exceed 8 hours.
+
+Measured on BTCUSDT, August 2026: a model trained through July, predicting
+August once with current funding and once with funding frozen at 1 August, the
+situation of a monthly refresh.
+
+| | current funding | frozen at 1 Aug |
+|---|---|---|
+| max `hours_since_funding` | 8 | **728** |
+| signals at the model's own 8% cutoff | 67 | **49** |
+| current-funding signals still taken | — | 44 of 67 |
+
+28 of 720 hourly decisions changed; a third of the signals the model would have
+sent were lost, and it fired less. The live drift monitor reported exactly that
+on 2026-09-23 — "fires on 3.9% of the last 284 bars against an 8% target".
+Stale funding is a plausible contributor. It has not been shown to be the cause,
+and the drift section above stands as written.
+
+The cycle now refreshes funding with the bars (one request per symbol), and a
+test fails if it stops. Every prediction in the live log before this fix was
+made with funding as stale as the last manual refresh; that is a property of
+those rows, recorded here rather than corrected in them.
+
 ## BTCUSDT retrained on the archive data: NO-GO on both verdicts, and long-only
 
 Date: 2026-09-30. `cryptopred-model train --symbol BTCUSDT` on 57,673 hourly
