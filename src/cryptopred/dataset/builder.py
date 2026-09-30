@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from cryptopred.config import FeatureConfig
+from cryptopred.features.context import context_features
 from cryptopred.features.pipeline import build_features
 from cryptopred.labels.barrier import make_labels
 
@@ -56,8 +57,15 @@ def build_dataset(
     funding: pd.DataFrame | None = None,
     symbol: str | None = None,
     feature_config: FeatureConfig | None = None,
+    context_bars: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Produce a clean training table for one symbol and interval."""
+    """Produce a clean training table for one symbol and interval.
+
+    `context_bars` adds the market-context features (features/context.py) AFTER
+    rows are dropped for missing values, and leaves their own gaps as NaN. So a
+    dataset with context has exactly the rows of one without it, and an
+    experiment comparing the two compares models, not samples.
+    """
     features = build_features(
         bars, interval=interval, funding=funding, config=feature_config
     )
@@ -74,6 +82,10 @@ def build_dataset(
     # with no meaningful precision loss for gradient-boosted trees.
     feature_cols = [c for c in features.columns if c in dataset.columns]
     dataset[feature_cols] = dataset[feature_cols].astype("float32")
+
+    if context_bars is not None:
+        context = context_features(bars, context_bars).reindex(dataset.index)
+        dataset = dataset.join(context.astype("float32"))
 
     if symbol is not None:
         dataset["symbol"] = symbol

@@ -57,6 +57,10 @@ class TrainConfig:
     # 0 lets LightGBM take every core. Parallel runs set it so that several
     # processes share the machine instead of each claiming all of it.
     num_threads: int = 0
+    # Weight training rows by age, halving every this many bars back from the
+    # newest row. None trains every row equally, which is the default until
+    # docs/preregistration-improvements.md says otherwise.
+    recency_half_life: float | None = None
     extra_params: dict[str, Any] = field(default_factory=dict)
 
     def lgb_params(self) -> dict[str, Any]:
@@ -87,6 +91,21 @@ class FoldResult:
     calibrators: list[IsotonicRegression] | None
     importance: dict[str, float]
     features: list[str]
+
+
+def recency_weights(n: int, half_life: float | None) -> np.ndarray | None:
+    """Row weights for a training window of n consecutive bars, oldest first.
+
+    The newest row weighs 1 and a row `half_life` bars older weighs 0.5. Only
+    the booster is weighted: calibrators are fitted unweighted, because a
+    probability has to mean how often, not how often lately.
+    """
+    if half_life is None:
+        return None
+    if half_life <= 0:
+        raise ValueError("recency_half_life must be positive")
+    age = np.arange(n - 1, -1, -1, dtype=float)
+    return np.power(0.5, age / half_life)
 
 
 def _fit_calibrators(
@@ -143,7 +162,10 @@ def fit_oof_calibrators(
     for train_idx, test_idx in cv.split(train.index):
         fold_train, fold_test = train.iloc[train_idx], train.iloc[test_idx]
         dataset = lgb.Dataset(
-            fold_train[features], label=fold_train["label_class"], free_raw_data=False
+            fold_train[features],
+            label=fold_train["label_class"],
+            weight=recency_weights(len(fold_train), config.recency_half_life),
+            free_raw_data=False,
         )
         booster = lgb.train(
             inner.lgb_params(), dataset, num_boost_round=inner.num_boost_round
@@ -184,7 +206,10 @@ def train_fold(
     if config.calibrate and config.calibration_method == "oof":
         # Train the booster on everything; calibrate from inner out-of-fold runs.
         dataset = lgb.Dataset(
-            train[features], label=train["label_class"], free_raw_data=False
+            train[features],
+            label=train["label_class"],
+            weight=recency_weights(len(train), config.recency_half_life),
+            free_raw_data=False,
         )
         booster = lgb.train(
             config.lgb_params(), dataset, num_boost_round=config.num_boost_round
@@ -211,7 +236,10 @@ def train_fold(
         holdout = None
 
     dataset = lgb.Dataset(
-        fit_df[features], label=fit_df["label_class"], free_raw_data=False
+        fit_df[features],
+        label=fit_df["label_class"],
+        weight=recency_weights(len(fit_df), config.recency_half_life),
+        free_raw_data=False,
     )
     booster = lgb.train(
         config.lgb_params(), dataset, num_boost_round=config.num_boost_round

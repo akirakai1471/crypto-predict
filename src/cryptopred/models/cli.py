@@ -28,6 +28,12 @@ from cryptopred.backtest.sizing_report import (
 from cryptopred.config import load_config
 from cryptopred.dataset.builder import dataset_path
 from cryptopred.ingest.storage import ParquetStore
+from cryptopred.models.experiment import (
+    ARMS,
+    PREREGISTERED_SYMBOLS,
+    format_experiment,
+    run_arm_symbol,
+)
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.models.report import format_evaluation, verdict
 from cryptopred.models.selection import margin_cutoff, signals_by_quantile_per_fold
@@ -598,6 +604,70 @@ def validate(
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
     kind = "sizing" if sizing_arm else "validation"
     emit(report, cfg.data.root / "reports" / f"{kind}_{interval}_{stamp}.txt")
+
+
+@app.command()
+def experiment(
+    arms: str = typer.Option(
+        "baseline,recency,market_context",
+        help="Pre-registered arms to run. The baseline is needed to judge the others.",
+    ),
+    symbols: str = typer.Option(
+        None, help="Comma-separated symbols. Defaults to the twenty pre-registered ones."
+    ),
+    interval: str = typer.Option("1h", help="Bar interval."),
+    jobs: int = typer.Option(
+        0, help="Symbol-arm runs to train at once; 0 uses every core. Results match --jobs 1."
+    ),
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+) -> None:
+    """Run the changes in docs/preregistration-improvements.md against a baseline.
+
+    Only arms registered in that document can be run, with the values written
+    there. The verdict for each arm is the document's four-part rule, applied
+    mechanically; an arm that fails any part is rejected.
+    """
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    cfg = load_config(config)
+    names = [a.strip() for a in arms.split(",") if a.strip()]
+    unknown = [a for a in names if a not in ARMS]
+    if unknown:
+        typer.echo(
+            f"Unknown arm(s): {', '.join(unknown)}. Registered: {', '.join(ARMS)}. "
+            "A new arm needs its own pre-registration first."
+        )
+        raise typer.Exit(code=1)
+
+    symbol_list = (
+        [s.strip() for s in symbols.split(",")] if symbols else list(PREREGISTERED_SYMBOLS)
+    )
+    frozen = FrozenConfig()
+    tasks = [(sym, arm) for arm in names for sym in symbol_list]
+    workers, threads = parallel.plan(jobs, len(tasks))
+    typer.echo(
+        f"  {len(tasks)} runs ({len(names)} arms x {len(symbol_list)} symbols), "
+        f"{workers} at a time ..."
+    )
+
+    def progress(i: int, result: SymbolResult) -> None:
+        sym, arm = tasks[i]
+        typer.echo(f"  {arm:>15} {sym}: {result.status}")
+
+    flat = parallel.run(
+        run_arm_symbol,
+        [(sym, cfg, interval, frozen, arm, threads) for sym, arm in tasks],
+        workers,
+        on_done=progress,
+    )
+    by_arm = {
+        arm: flat[i * len(symbol_list) : (i + 1) * len(symbol_list)]
+        for i, arm in enumerate(names)
+    }
+    stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
+    emit(
+        format_experiment(by_arm),
+        cfg.data.root / "reports" / f"experiment_{interval}_{stamp}.txt",
+    )
 
 
 @app.command()

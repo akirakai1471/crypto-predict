@@ -116,11 +116,15 @@ def evaluate_symbol(
     bars: pd.DataFrame,
     config: FrozenConfig,
     threads: int = 0,
+    train_overrides: dict[str, Any] | None = None,
 ) -> SymbolResult:
     """Train and score one symbol under the frozen configuration.
 
     `threads` is compute, not configuration: LightGBM gives identical results at
     any thread count, so it is left out of FrozenConfig on purpose.
+
+    `train_overrides` is for pre-registered experiments only (models/experiment.py):
+    fields of TrainConfig that one arm changes and the baseline does not.
     """
     if len(bars) < MIN_BARS:
         return SymbolResult(
@@ -139,6 +143,7 @@ def evaluate_symbol(
             calibration_method="oof",
             calibration_splits=config.calibration_splits,
             num_threads=threads,
+            **(train_overrides or {}),
         ),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
@@ -203,6 +208,7 @@ def evaluate_symbol(
             "short_win_rate": short_s.win_rate,
             "short_pnl": short_s.total_pnl,
             "two_sided": verdict["decision"],
+            "log_loss": evaluation["model"]["log_loss"],
         },
     )
 

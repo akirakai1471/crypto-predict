@@ -108,3 +108,33 @@ def test_features_never_reference_the_next_bar():
     pd.testing.assert_frame_equal(
         long_feats.tail(5), short_feats.tail(5), check_freq=False, rtol=1e-9, atol=1e-12
     )
+
+
+def test_market_context_cannot_see_the_context_symbols_future():
+    """The context features read another symbol's bars. Poisoning that symbol
+    after the cut must leave every context feature at or before the cut intact,
+    exactly as for the symbol's own features."""
+    from cryptopred.features.context import context_features
+
+    bars = make_ohlcv(n=1000, seed=21)
+    context = make_ohlcv(n=1000, seed=22)
+    cut = 700
+
+    poisoned = context.copy()
+    for col in ["open", "high", "low", "close"]:
+        poisoned.iloc[cut:, poisoned.columns.get_loc(col)] = 1e9
+
+    clean = context_features(bars, context).iloc[:cut]
+    dirty = context_features(bars, poisoned).iloc[:cut]
+    pd.testing.assert_frame_equal(clean, dirty, check_freq=False)
+
+
+def test_a_missing_context_bar_stays_missing_rather_than_carried_forward():
+    """Forward-filling would state a context price at t that nobody saw at t."""
+    from cryptopred.features.context import context_features
+
+    bars = make_ohlcv(n=300, seed=23)
+    context = make_ohlcv(n=300, seed=24).drop(index=bars.index[150])
+    feats = context_features(bars, context)
+    assert np.isnan(feats["ctx_ret_1"].iloc[150])
+    assert np.isnan(feats["ctx_ret_1"].iloc[151])  # its return needs bar 150
