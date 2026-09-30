@@ -17,6 +17,8 @@ from fastapi.responses import FileResponse
 from cryptopred.config import Config, load_config
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.registry import ModelRegistry
+from cryptopred.news.store import NewsStore
+from cryptopred.news.tags import TAG_CAVEAT
 from cryptopred.paper.trader import PaperTrader
 from cryptopred.serve import heartbeat
 from cryptopred.serve.alerts import read_log
@@ -40,6 +42,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         execution=cfg.strategy.execution_model(),
     )
     predictors: dict[tuple[str, str], Predictor] = {}
+    news = NewsStore(cfg.data.root / "news.db")
 
     def get_predictor(symbol: str, interval: str) -> Predictor:
         """Cached, but invalidated when a newer model is saved.
@@ -246,6 +249,30 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         that stops it reading as advice.
         """
         return {"alerts": read_log(cfg.data.root / "signals.log", limit=min(limit, 100))}
+
+    @app.get("/api/news")
+    def news_items(limit: int = 20, symbol: str = "", include_old: bool = False) -> dict[str, Any]:
+        """Newest headlines, as received, with the caveat in the same payload.
+
+        Every tag here is a keyword match nobody has validated, so the caveat
+        travels with the items - as /api/metrics carries its own - instead of
+        living only in the page that happens to render them. received_at is our
+        clock, not the publisher's; last_poll says whether anything is still
+        listening, since an empty list alone cannot. Headlines that were already
+        old when they arrived are left out unless include_old is set.
+        """
+        return {
+            "items": news.recent(
+                limit=max(1, min(limit, 200)),
+                symbol=symbol.strip().upper() or None,
+                include_old=include_old,
+            ),
+            "caveat": TAG_CAVEAT,
+            "tagging": "convention_unvalidated",
+            "last_poll": news.last_poll(),
+            "poll_seconds": cfg.news.poll_seconds,
+            "n_feeds": len(cfg.news.feeds),
+        }
 
     @app.get("/api/config")
     def config() -> dict[str, Any]:
