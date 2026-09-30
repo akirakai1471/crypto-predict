@@ -39,3 +39,17 @@ features:
   mtf_rules:
     "1h": ["4h", "1D"]
     "1m": ["15min", "1h"]
+
+news:
+  # Headlines are collected and shown on the dashboard, NOT given to the model:
+  # free RSS keeps only a few days, so there is no history to test them on yet.
+  # Keyword tags and the "high impact" flag are conventions nobody has measured.
+  poll_seconds: 60            # conditional GET: an unchanged feed costs a 304
+  alert_high_impact: true     # high-impact + tagged BTCUSDT/ETHUSDT -> data/news.log
+  max_alerts_per_hour: 3
+  feeds:
+    - {name: CoinDesk, url: "https://www.coindesk.com/arc/outboundfeeds/rss/"}
+    - {name: Cointelegraph, url: "https://cointelegraph.com/rss"}
+    - {name: Decrypt, url: "https://decrypt.co/feed"}
+    - {name: The Block, url: "https://www.theblock.co/rss.xml"}
+    - {name: Bitcoin Magazine, url: "https://bitcoinmagazine.com/.rss/full/"}

@@ -92,11 +92,48 @@ class FeatureConfig(BaseModel):
     )
 
 
+class FeedConfig(BaseModel):
+    """One RSS or Atom feed: a display name and the URL to poll."""
+
+    name: str
+    url: str
+
+
+# Every host here has to be reachable from the machine running the scheduler.
+# A feed that redirects to another host needs that host allowed too.
+DEFAULT_FEEDS: list[dict[str, str]] = [
+    {"name": "CoinDesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"},
+    {"name": "Cointelegraph", "url": "https://cointelegraph.com/rss"},
+    {"name": "Decrypt", "url": "https://decrypt.co/feed"},
+    {"name": "The Block", "url": "https://www.theblock.co/rss.xml"},
+    {"name": "Bitcoin Magazine", "url": "https://bitcoinmagazine.com/.rss/full/"},
+]
+
+
+class NewsConfig(BaseModel):
+    """Headline collection.
+
+    Collected and shown, not predicted from. Free RSS keeps a few days of items,
+    so there is no history to test a news feature on yet; nothing here reaches
+    the model until months of point-in-time headlines exist to measure it with.
+    """
+
+    feeds: list[FeedConfig] = Field(
+        default_factory=lambda: [FeedConfig(**feed) for feed in DEFAULT_FEEDS]
+    )
+    # Conditional GET makes an unchanged feed cost a 304 and a few hundred
+    # bytes. The floor keeps a typo from polling five publishers every second.
+    poll_seconds: int = Field(default=60, ge=10)
+    alert_high_impact: bool = True
+    max_alerts_per_hour: int = Field(default=3, ge=0)
+
+
 class Config(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     labels: LabelConfig = Field(default_factory=LabelConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
+    news: NewsConfig = Field(default_factory=NewsConfig)
 
     def raw_dir(self, kind: str) -> Path:
         """Directory holding raw downloads of a given kind (klines, funding, ...)."""
