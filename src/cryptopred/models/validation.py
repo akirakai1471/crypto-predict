@@ -25,6 +25,9 @@ from cryptopred.backtest.engine import CostModel, backtest
 from cryptopred.backtest.execution import ExecutionModel
 from cryptopred.backtest.sizing import size_from_confidence
 from cryptopred.backtest.sizing_report import match_exposure
+from cryptopred.config import Config
+from cryptopred.dataset.builder import build_dataset
+from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.selection import signals_by_quantile_per_fold
 from cryptopred.models.train import TrainConfig, walk_forward_evaluate
 from cryptopred.paper.replay import SideStats, two_sided_verdict
@@ -112,8 +115,13 @@ def evaluate_symbol(
     dataset: pd.DataFrame,
     bars: pd.DataFrame,
     config: FrozenConfig,
+    threads: int = 0,
 ) -> SymbolResult:
-    """Train and score one symbol under the frozen configuration."""
+    """Train and score one symbol under the frozen configuration.
+
+    `threads` is compute, not configuration: LightGBM gives identical results at
+    any thread count, so it is left out of FrozenConfig on purpose.
+    """
     if len(bars) < MIN_BARS:
         return SymbolResult(
             symbol,
@@ -130,6 +138,7 @@ def evaluate_symbol(
             num_boost_round=config.rounds,
             calibration_method="oof",
             calibration_splits=config.calibration_splits,
+            num_threads=threads,
         ),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
@@ -203,6 +212,7 @@ def evaluate_symbol_sizing(
     dataset: pd.DataFrame,
     bars: pd.DataFrame,
     config: FrozenConfig,
+    threads: int = 0,
 ) -> SymbolResult:
     """Fixed versus linear staking on one symbol, at equal average exposure.
 
@@ -227,6 +237,7 @@ def evaluate_symbol_sizing(
             num_boost_round=config.rounds,
             calibration_method="oof",
             calibration_splits=config.calibration_splits,
+            num_threads=threads,
         ),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
@@ -299,6 +310,40 @@ def evaluate_symbol_sizing(
             ),
         },
     )
+
+
+def run_symbol(
+    symbol: str,
+    cfg: Config,
+    interval: str,
+    config: FrozenConfig,
+    sizing: bool = False,
+    threads: int = 0,
+) -> SymbolResult:
+    """Load, build and evaluate one symbol from the store.
+
+    Everything a worker process needs arrives as arguments and the data is read
+    inside it, so twenty symbols can train at once without shipping twenty
+    datasets through a pipe.
+    """
+    parquet = ParquetStore(cfg.data.root / "raw")
+    bars = parquet.read("klines", symbol, interval)
+    if bars.empty:
+        return SymbolResult(symbol, status="skipped: no bars stored")
+
+    funding = parquet.read("funding", symbol, "8h")
+    dataset = build_dataset(
+        bars,
+        interval=interval,
+        horizon=config.horizon,
+        atr_period=cfg.labels.atr_period,
+        band_k=cfg.labels.band_k,
+        funding=funding if not funding.empty else None,
+        symbol=symbol,
+        feature_config=cfg.features,
+    )
+    evaluate = evaluate_symbol_sizing if sizing else evaluate_symbol
+    return evaluate(symbol, dataset, bars, config, threads=threads)
 
 
 def sizing_verdict(favoured: int, attempted: int) -> str:

@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import typer
 
+from cryptopred import parallel
 from cryptopred.backtest.breakeven import analyse, format_table, round_trip_cost
 from cryptopred.backtest.engine import CostModel
 from cryptopred.backtest.execution_report import compare_execution, format_execution_comparison
@@ -25,7 +26,7 @@ from cryptopred.backtest.sizing_report import (
     format_sizing_comparison,
 )
 from cryptopred.config import load_config
-from cryptopred.dataset.builder import build_dataset, dataset_path
+from cryptopred.dataset.builder import dataset_path
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.models.report import format_evaluation, verdict
@@ -42,10 +43,9 @@ from cryptopred.models.train import (
 from cryptopred.models.validation import (
     FrozenConfig,
     SymbolResult,
-    evaluate_symbol,
-    evaluate_symbol_sizing,
     format_sizing_validation,
     format_validation,
+    run_symbol,
 )
 from cryptopred.report_io import emit
 
@@ -73,6 +73,9 @@ def train(
     horizon: int = typer.Option(
         None, help="Label horizon in bars, overriding the config."
     ),
+    jobs: int = typer.Option(
+        0, help="Processes to train folds in; 0 uses every core. Results match --jobs 1."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Evaluate walk-forward, print the report, and optionally save the model."""
@@ -95,7 +98,7 @@ def train(
 
     typer.echo(f"Training on {len(dataset):,} rows from {path.name} ...")
     evaluation = walk_forward_evaluate(
-        dataset, n_splits=n_splits, horizon=horizon, config=train_config
+        dataset, n_splits=n_splits, horizon=horizon, config=train_config, n_jobs=jobs
     )
 
     report = format_evaluation(evaluation, symbol=symbol, interval=interval, threshold=threshold)
@@ -302,6 +305,9 @@ def sweep(
     horizon: int = typer.Option(
         None, help="Label horizon in bars, overriding the config."
     ),
+    jobs: int = typer.Option(
+        0, help="Processes to train folds in; 0 uses every core. Results match --jobs 1."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Diagnostic: how signal count, accuracy and PnL vary with coverage.
@@ -335,6 +341,7 @@ def sweep(
         dataset,
         n_splits=n_splits,
         horizon=horizon,
+        n_jobs=jobs,
         config=TrainConfig(num_boost_round=rounds, calibrate=True),
     )
     test_index = dataset.index[-evaluation["n_test_total"] :]
@@ -390,6 +397,9 @@ def sizing(
     kelly_scale: float = typer.Option(
         0.5, help="Fraction of full Kelly to stake. Below 1 on purpose — see the module docs."
     ),
+    jobs: int = typer.Option(
+        0, help="Processes to train folds in; 0 uses every core. Results match --jobs 1."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Does betting more on stronger signals beat betting the same every time?
@@ -417,6 +427,7 @@ def sizing(
         dataset,
         n_splits=n_splits,
         horizon=horizon,
+        n_jobs=jobs,
         config=TrainConfig(num_boost_round=rounds),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
@@ -474,6 +485,9 @@ def execution(
     maker_fee: float = typer.Option(0.0002, help="Maker fee per side."),
     n_splits: int = typer.Option(5, help="Walk-forward folds."),
     rounds: int = typer.Option(400, help="LightGBM boosting rounds."),
+    jobs: int = typer.Option(
+        0, help="Processes to train folds in; 0 uses every core. Results match --jobs 1."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Do limit orders beat market orders once missed fills are counted?
@@ -506,6 +520,7 @@ def execution(
         dataset,
         n_splits=n_splits,
         horizon=horizon,
+        n_jobs=jobs,
         config=TrainConfig(num_boost_round=rounds),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
@@ -541,6 +556,9 @@ def validate(
         "--sizing",
         help="Compare fixed against linear staking instead of running the pass gates.",
     ),
+    jobs: int = typer.Option(
+        0, help="Symbols to train at once; 0 uses every core. Results match --jobs 1."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Run the frozen configuration across many symbols and report the spread.
@@ -559,31 +577,18 @@ def validate(
     frozen = FrozenConfig()
     names = [s.strip() for s in symbols.split(",")] if symbols else cfg.data.symbols
 
-    parquet = ParquetStore(cfg.data.root / "raw")
-    results = []
-    for symbol in names:
-        typer.echo(f"  {symbol} ...")
-        bars = parquet.read("klines", symbol, interval)
-        if bars.empty:
-            results.append(SymbolResult(symbol, status="skipped: no bars stored"))
-            continue
+    workers, threads = parallel.plan(jobs, len(names))
+    typer.echo(f"  {len(names)} symbols, {workers} at a time ...")
 
-        funding = parquet.read("funding", symbol, "8h")
-        dataset = build_dataset(
-            bars,
-            interval=interval,
-            horizon=frozen.horizon,
-            atr_period=cfg.labels.atr_period,
-            band_k=cfg.labels.band_k,
-            funding=funding if not funding.empty else None,
-            symbol=symbol,
-            feature_config=cfg.features,
-        )
-        results.append(
-            evaluate_symbol_sizing(symbol, dataset, bars, frozen)
-            if sizing_arm
-            else evaluate_symbol(symbol, dataset, bars, frozen)
-        )
+    def progress(i: int, result: SymbolResult) -> None:
+        typer.echo(f"  {names[i]}: {result.status}")
+
+    results = parallel.run(
+        run_symbol,
+        [(symbol, cfg, interval, frozen, sizing_arm, threads) for symbol in names],
+        workers,
+        on_done=progress,
+    )
 
     report = (
         format_sizing_validation(results, frozen)

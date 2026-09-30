@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 
+from cryptopred import parallel
 from cryptopred.dataset.builder import feature_columns
 from cryptopred.models.baselines import BASELINES, baseline_predictions
 from cryptopred.models.metrics import evaluate
@@ -53,6 +54,9 @@ class TrainConfig:
     calibration_splits: int = 4
     signal_threshold: float = 0.5
     seed: int = 42
+    # 0 lets LightGBM take every core. Parallel runs set it so that several
+    # processes share the machine instead of each claiming all of it.
+    num_threads: int = 0
     extra_params: dict[str, Any] = field(default_factory=dict)
 
     def lgb_params(self) -> dict[str, Any]:
@@ -69,7 +73,7 @@ class TrainConfig:
             "lambda_l2": self.lambda_l2,
             "seed": self.seed,
             "verbosity": -1,
-            "num_threads": 0,
+            "num_threads": self.num_threads,
         }
         params.update(self.extra_params)
         return params
@@ -232,23 +236,49 @@ def train_fold(
     )
 
 
+def train_fold_task(
+    train: pd.DataFrame, test: pd.DataFrame, config: TrainConfig, horizon: int
+) -> FoldResult:
+    """train_fold with positional arguments, for a worker process to call."""
+    return train_fold(train, test, config, horizon=horizon)
+
+
 def walk_forward_evaluate(
     dataset: pd.DataFrame,
     n_splits: int = 5,
     horizon: int = 4,
     embargo_frac: float = 0.01,
     config: TrainConfig | None = None,
+    n_jobs: int = 1,
 ) -> dict[str, Any]:
     """Train and evaluate across every fold, alongside all four baselines.
 
     Returns pooled out-of-sample metrics for the model and each baseline, plus
     per-fold detail and averaged feature importance.
+
+    `n_jobs` trains folds in separate processes (0 = every core). The folds are
+    independent and LightGBM is deterministic across thread counts here, so the
+    result is identical to a serial run, only sooner.
     """
     if "label_class" not in dataset.columns:
         raise KeyError("dataset is missing 'label_class'; build it with cryptopred-dataset")
 
     config = config or TrainConfig()
     cv = PurgedWalkForward(n_splits=n_splits, horizon=horizon, embargo_frac=embargo_frac)
+    splits = list(cv.split(dataset.index))
+
+    workers, threads = parallel.plan(n_jobs, len(splits)) if n_jobs != 1 else (1, 0)
+    fold_config = (
+        TrainConfig(**{**config.__dict__, "num_threads": threads}) if workers > 1 else config
+    )
+    fitted = parallel.run(
+        train_fold_task,
+        [
+            (dataset.iloc[train_idx], dataset.iloc[test_idx], fold_config, horizon)
+            for train_idx, test_idx in splits
+        ],
+        workers,
+    )
 
     all_proba: list[np.ndarray] = []
     all_true: list[np.ndarray] = []
@@ -257,11 +287,12 @@ def walk_forward_evaluate(
     folds: list[dict[str, Any]] = []
     importances: list[dict[str, float]] = []
 
-    for fold_id, (train_idx, test_idx) in enumerate(cv.split(dataset.index)):
+    for fold_id, ((train_idx, test_idx), result) in enumerate(
+        zip(splits, fitted, strict=True)
+    ):
         train = dataset.iloc[train_idx]
         test = dataset.iloc[test_idx]
 
-        result = train_fold(train, test, config, horizon=horizon)
         all_proba.append(result.proba)
         all_true.append(result.y_true)
         all_returns.append(test["forward_return"].to_numpy())
