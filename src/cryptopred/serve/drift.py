@@ -55,6 +55,14 @@ def coverage_drift(
         return {"state": "no_data", "detail": "nothing logged yet", "n_rows": 0}
 
     rows = history[history["model_version"] == model_version]
+    # The store hands the log back newest first. Without putting it in time
+    # order, tail() keeps the OLDEST bars, and once a model has logged more than
+    # `window` of them the check freezes on its first weeks and never sees the
+    # present again.
+    if "bar_close_time" in rows.columns:
+        rows = rows.sort_values(
+            "bar_close_time", key=lambda s: pd.to_datetime(s, utc=True), kind="stable"
+        )
     rows = rows.tail(window)
     n = len(rows)
     if n < MIN_ROWS_TO_JUDGE:
