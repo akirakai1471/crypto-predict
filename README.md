@@ -99,9 +99,11 @@ Nhưng **chưa chứng minh được đây là edge giao dịch**:
 - Cấu hình 24h của BTC bền qua phí gấp đôi, nhưng ETH thất bại ở mọi ngưỡng.
 - Đã xét 28 cấu hình, 1 cái đạt. Đó xấp xỉ tỉ lệ may rủi thuần tuý.
 
-Model BTC đang phục vụ được lưu **dưới chế độ ghi đè cổng kiểm** — nó thua
-baseline tần suất nền trên Brier score toàn cục. Lý do ghi đè được ghi vĩnh viễn
-vào metadata và hiện trên dashboard.
+Model BTC đang phục vụ (train lại ngày 23/09/2026) qua **cả hai** cổng kiểm —
+phân loại và chiến lược — không cần ghi đè. Qua cổng không có nghĩa là có edge:
+cổng chỉ loại model chắc chắn không sống nổi qua phí. Nếu một model nào đó từng
+được lưu dưới chế độ ghi đè, lý do được ghi vĩnh viễn vào metadata và hiện trên
+dashboard.
 
 ## Cài đặt
 
@@ -120,6 +122,19 @@ uv run cryptopred-ingest klines
 ```bash
 uv run cryptopred-ingest funding
 ```
+
+**Tải lịch sử nhiều năm nhanh hơn — hoặc khi API báo lỗi 451** (Binance chặn API
+theo vùng, ví dụ máy chủ cloud ở Mỹ): lấy từ kho công khai `data.binance.vision`,
+mỗi tháng một file nén, file nào cũng được đối chiếu checksum SHA-256 trước khi
+đọc. 20 coin, 1,05 triệu nến 1h mất 7 phút:
+
+```bash
+uv run cryptopred-ingest vision --config configs/twenty-symbols.yaml
+```
+
+Mặc định dừng ở **hết tháng trước**: kho không có funding theo ngày, nên nến
+tháng này sẽ mang funding cũ. Phần còn lại bù bằng `klines` và `funding` ở trên.
+Nến 1h trong kho bắt đầu từ 01/2020.
 
 Dựng dataset train (kèm báo cáo chất lượng và tầm soát rò rỉ):
 
@@ -163,8 +178,11 @@ tới, chứ dự án này chưa đo chúng có giá trị dự báo hay không.
 
 Hai lưu ý đã dán sẵn trong output, đọc trước khi tin số:
 
-- Khoảng tin cậy có **độ phủ đo được ≈80%, không phải 95%** — xem mục tương ứng
-  trong `docs/findings.md` để biết đo thế nào.
+- Khoảng tin cậy có **độ phủ đo được ≈85%, không phải 95%** — và **thấp hơn
+  nhiều (69–85%) khi biến động đang ở một chế độ kéo dài nhiều tuần**. Mọi
+  phương pháp đã thử đều hụt ở trường hợp đó. Đo lại bằng
+  `uv run python scripts/touch_interval_coverage.py`; kết quả và cách đo ở mục
+  tương ứng trong `docs/findings.md`.
 - Nếu dữ liệu cũ, dòng đầu tiên nói rõ cũ bao nhiêu giờ.
 
 Hỏi tự do bằng tiếng Việt thì cần key Anthropic (`ant auth login` hoặc
@@ -197,7 +215,9 @@ uv run cryptopred-serve schedule
 Nhấp đúp `run.bat` — mở 2 cửa sổ (scheduler + dashboard) và bật trình duyệt.
 Đóng cửa sổ nào là dừng phần đó.
 
-**Cách biết chắc nó đang chạy:** nhấp đúp `status.bat`. Dòng đầu tiên là
+**Cách biết chắc nó đang chạy:** nhìn góc trên dashboard — chấm đầu tiên là
+scheduler (xanh = đang chạy, đỏ = đã dừng hoặc chưa từng chạy), chấm thứ hai là
+độ tươi của dữ liệu. Hoặc nhấp đúp `status.bat`. Dòng đầu tiên là
 
 ```
 Scheduler: RUNNING — last cycle 12 minutes ago
@@ -241,8 +261,17 @@ Hai điều cố ý:
   horizon bị gộp; tín hiệu **đổi chiều** thì luôn báo, vì đổi chiều là thông tin
   mới.
 
+Năm thông báo gần nhất hiện trên dashboard ở mục **Thông báo gần đây**, nguyên
+văn như lúc gửi — balloon Windows chỉ sống 11 giây.
+
 Đổi code alert thì phải **khởi động lại scheduler** mới nhận — tiến trình đang
 chạy giữ bản code lúc nó khởi động.
+
+**Trước bản sửa ngày 30/09/2026, thông báo không bao giờ bật.** Scheduler ghi dự
+đoán vào log rồi mới hỏi có nên báo không, nên tín hiệu luôn thấy chính nó là
+"tín hiệu cùng chiều trong horizon" và tự chặn. Nếu `data/signals.log` không có
+thông báo nào do scheduler gửi kể từ 26/09, lý do là vậy, không phải model im
+lặng. Chạy lại `run.bat` để scheduler nạp bản đã sửa.
 
 **Bảo trì định kỳ — nhấp đúp `check-model.bat`.** Nó nạp nến mới, dựng lại
 dataset, in trạng thái live, rồi đánh giá xem model train trên dữ liệu hôm nay
@@ -302,13 +331,80 @@ Trong vài ngày đầu, thứ đáng kiểm là **hạ tầng**, không phải 
 dự đoán có được ghi mỗi giờ không, tín hiệu có nổ đúng tần suất không, lệnh limit
 có khớp ~63% không, việc chấm điểm có chạy không.
 
+## Tin tức: nhận nhanh, hiển thị ngay — chưa đưa vào model
+
+Scheduler quét RSS của **CoinDesk, Cointelegraph, Decrypt, The Block và Bitcoin
+Magazine** mỗi 60 giây, lưu vào `data/news.db` và hiện ở mục **Tin mới** trên
+dashboard. Mỗi lượt gửi lại ETag/Last-Modified của lần trước (conditional GET),
+nên feed không đổi chỉ tốn một phản hồi 304 — đo ngày 30/09/2026: Cointelegraph
+và The Block trả 304 thật; CoinDesk không gửi header nào nên mỗi phút tải lại
+~30 KB. Một nguồn chết không chặn các nguồn còn lại.
+
+**Nhanh tới đâu.** Tin tới tay bạn sau: độ trễ của toà soạn khi đưa bài vào RSS
+(thường tính bằng phút — **chưa đo**) + tối đa 60 giây chờ lượt quét + tối đa 60
+giây chờ dashboard tự tải lại. Mỗi tin lưu cả giờ toà soạn ghi lẫn giờ hệ thống
+nhận, nên sau vài tuần sẽ đo được độ trễ thật thay vì đoán.
+
+**Giờ nào là thật.** Giờ hiển thị là lúc **máy này nhận** tin (`received_at`),
+không phải giờ toà soạn ghi. Toà soạn lùi giờ, sửa bài là đổi giờ, có feed không
+ghi múi giờ — chỉ đồng hồ của chính mình mới chứng minh được một tin đã có trước
+khi nến đóng.
+
+**Tin cũ bị ẩn.** Feed của Decrypt xoay vòng bài cũ: một lượt quét 15 giây sau
+lượt đầu mang về 20 bài video từ 9 tháng trước. Tin mà chính toà soạn ghi sớm hơn
+lúc nhận quá 2 giờ vẫn được lưu, nhưng không hiện ở "Tin mới", không được báo,
+không được đếm vào feature. Xem cả tin cũ: `cryptopred-news recent --all`. Vì
+vậy lần đầu bật scheduler, "Tin mới" chỉ có vài tin của 2 giờ gần nhất — phần
+còn lại của RSS là tin cũ.
+
+**Mạng phải cho phép** (HTTPS, cổng 443): `www.coindesk.com`, `cointelegraph.com`,
+`decrypt.co`, `www.theblock.co`, `bitcoinmagazine.com`. Feed nào chuyển hướng
+sang host khác thì phải mở cả host đó; chuyển hướng từ https sang http thường bị
+từ chối (địa chỉ feed cũ của Bitcoin Magazine làm đúng việc đó, nên cấu hình dùng
+địa chỉ đích). Đã chạy thử với cả 5 feed thật ngày 30/09/2026: 5/5 trả lời, lượt
+đầu nạp 121 tin. Mạng của môi trường phát triển lúc chặn lúc mở, nên phần lớn
+test dùng feed mẫu. Lần đầu chạy trên máy bạn, gõ `uv run cryptopred-news poll`
+và xem cột lỗi.
+
+**Vì sao chưa đưa vào model.** RSS miễn phí chỉ giữ vài ngày, nên **không có lịch
+sử để kiểm**. Một feature tin phải qua đúng các cổng walk-forward mà mọi feature
+khác đã qua; chưa qua thì không được vào model. Nhãn coin và cờ "tác động cao" là
+**QUY ƯỚC — CHƯA KIỂM CHỨNG**: chỉ là khớp từ khoá, chưa ai đo chúng dự báo được
+gì. Kế hoạch: thu thập **ít nhất 3 tháng**, rồi mới đo. Hàm `news_features` đã
+có sẵn và có test chống rò rỉ riêng (`tests/test_news_leakage.py`): chỉ đếm tin
+nhận trước giờ đóng nến, và trả **NaN chứ không phải 0** cho khoảng máy tắt —
+không nghe thấy không có nghĩa là không có tin. Một test chặn nó bị nối vào
+pipeline train.
+
+**Thông báo tin** (tắt bằng `news.alert_high_impact: false`): chỉ tin "tác động
+cao" có gắn BTCUSDT/ETHUSDT, ghi vào `data/news.log` + popup, tách khỏi
+`signals.log` của model. Tối đa 3 tin mỗi giờ (`news.max_alerts_per_hour`),
+không bao giờ báo lại một tin, không báo tin tồn đọng sau khi bật máy hay mất
+mạng, không báo tin mà chính toà soạn ghi sớm hơn lúc nhận quá 2 giờ. Dòng đầu
+(tiêu đề popup) nói đó là **tiêu đề tin, không phải tín hiệu**; cuối thông báo
+nói thêm **không phải khuyến nghị**, kèm các từ khoá đã khớp.
+
+Lệnh `cryptopred-news` là lệnh mới, cần cài lại một lần để có:
+`uv pip install -e ".[dev]"`.
+
+```bash
+uv run cryptopred-news poll                          # quét một lượt, in số tin mới
+uv run cryptopred-news watch --every 60              # quét liên tục, Ctrl-C để dừng
+uv run cryptopred-news recent --limit 20 --symbol BTCUSDT
+```
+
+`run.bat` không cần sửa — job tin chạy bên trong scheduler. Nhưng scheduler đang
+chạy giữ code cũ: chạy lại `run.bat` để nó bắt đầu quét tin. `watch` chỉ in ra
+màn hình, không gửi thông báo, để một tin không bị báo hai lần.
+
 ## Kiểm thử
 
 ```bash
 uv run pytest
 ```
 
-204 test, chạy hoàn toàn offline. Quan trọng nhất là `tests/test_leakage.py`:
+803 test, chạy hoàn toàn offline (5 test cần kho dữ liệu thật sẽ tự bỏ qua nếu
+chưa tải). Quan trọng nhất là `tests/test_leakage.py`:
 6 test chặn rò rỉ dữ liệu tương lai. **Nếu bộ này đỏ, mọi con số trong dự án đều
 vô nghĩa** — sửa rò rỉ trước, đừng train.
 
@@ -324,6 +420,7 @@ vô nghĩa** — sửa rò rỉ trước, đừng train.
 | `src/cryptopred/backtest/` | Backtest trừ phí, kiểm tra độ bền |
 | `src/cryptopred/serve/` | FastAPI, scheduler, log dự đoán SQLite |
 | `src/cryptopred/paper/` | Bot tiền giả |
+| `src/cryptopred/news/` | Tin RSS: thu thập, lưu SQLite, nhãn quy ước — chưa vào model |
 | `web/` | Dashboard một file, không cần build |
 
 ## Luật của dự án
@@ -336,6 +433,66 @@ vô nghĩa** — sửa rò rỉ trước, đừng train.
 5. Accuracy out-of-sample > 60% ở khung giờ = **coi như có bug** cho tới khi
    chứng minh ngược lại.
 6. Mọi tỉ lệ hiển thị kèm cỡ mẫu.
+
+## Train song song
+
+Mọi lệnh train giờ chạy song song trên mọi nhân CPU — mặc định `--jobs 0`:
+
+```bash
+uv run cryptopred-model validate --jobs 0
+```
+
+`train`, `sweep`, `sizing`, `execution` chạy các fold cùng lúc; `validate` và
+`experiment` chạy nhiều coin cùng lúc. **Kết quả không đổi một chữ số**: LightGBM
+cho dự đoán giống hệt ở 1, 2 hay 4 luồng, có test ép fold song song phải bằng
+fold tuần tự, và báo cáo 4 coin chạy hai kiểu diff ra giống hệt. Chạy song song
+chỉ đổi thời gian: 148 giây → 82 giây trên máy 4 nhân; máy nhiều nhân hơn và
+nhiều coin hơn thì chênh lệch lớn hơn. `--jobs 1` về lại chạy tuần tự.
+
+Song song bằng **tiến trình**, không bằng luồng, vì đó là chỗ thời gian bị phí:
+một model LightGBM 4 luồng chỉ nhanh hơn 1 luồng 2,3 lần trên 4 nhân.
+
+## Thử cải tiến model — đăng ký trước, rồi mới chạy
+
+"Nhạy hơn" ở dự án này **không** được phép nghĩa là bắn nhiều tín hiệu hơn —
+bảng hoà vốn đã cho thấy điều đó thua phí. Nghĩa khả thi là: **thích nghi nhanh
+hơn khi thị trường đổi chế độ, vẫn giao dịch đúng 8% số nến**. Hai thay đổi, mỗi
+cái một giá trị, được ghi vào `docs/preregistration-improvements.md` và commit
+**trước khi** chạy trên dữ liệu thật:
+
+| Phương án | Thay đổi |
+|---|---|
+| `recency` | Dữ liệu gần nặng ký hơn: nửa trọng số sau mỗi 8.760 nến (1 năm) |
+| `market_context` | 5 feature từ BTC cùng thời điểm đóng nến (ETH cho chính BTC) |
+
+```bash
+uv run cryptopred-model experiment --jobs 0
+```
+
+Chạy cả hai cùng baseline trên 20 coin, rồi áp **máy móc** luật đã ghi: chỉ nhận
+nếu thắng baseline ở ≥15/20 coin, trung bình +0,5 điểm %, không mất coin nào qua
+cổng, và log loss không tệ hơn. Trượt một điều là loại, và mặc định không đổi.
+
+Vì sao phải khắt khe vậy: chạy thử trên 4 coin **dữ liệu ngẫu nhiên**, phương án
+`recency` cho trung bình **+0,82 điểm %** — trông như cải tiến, nhưng là nhiễu
+thuần tuý vì dữ liệu không có gì để đoán. Chỉ nhìn con số trung bình là sẽ nhận
+nhầm. Ba điều kiện còn lại đã loại nó.
+
+**Kết quả thật (30/09/2026, 20 coin, 1,05 triệu nến): cả hai bị loại.**
+
+| | baseline | recency | market_context |
+|---|---|---|---|
+| Đúng hướng TB (8% nến giao dịch) | **54,44%** | 53,79% | 54,60% |
+| Thắng baseline | — | 9/20 | 12/20 (cần 15) |
+| Kết luận | | **LOẠI** — tệ hơn | **LOẠI** — không đo được cải thiện |
+
+`market_context` cải thiện log loss (1,0170 so với 1,0208) nhưng không cải thiện
+đúng thứ chiến lược giao dịch; nhận nó bây giờ là chọn tiêu chí sau khi thấy kết
+quả. Chi tiết và bảng từng coin trong `docs/findings.md`. Mặc định giữ nguyên.
+
+Điều đáng chú ý nhất lại là baseline: **20/20 coin đúng hướng trên 50%** ở những
+nến nó chọn giao dịch — nhưng 20 coin crypto tương quan mạnh, không phải 20 phép
+thử độc lập.
 
 ## Kiểm chứng trên 20 coin — cấu hình đóng băng
 
@@ -464,8 +621,14 @@ Và nó **không tạo ra edge từ hư không**: trên ETH mọi biến thể m
 nhuận nhưng vẫn **một chiều**. Phí rẻ làm cược một chiều rẻ hơn, không biến nó
 thành dự đoán.
 
-**Chưa áp dụng thật:** paper trader hiện đặt lệnh market. Chuyển sang maker là
-sửa đường thực thi, không phải đổi config.
+**Đã áp dụng:** paper trader đặt lệnh limit thật từ 26/08/2026 — xem mục "Paper
+trader đặt lệnh limit thật" ở trên.
+
+**Bảng trên đo dưới quy tắc ngưỡng 0.60 đã rút lại.** Chạy lại ngày 11/09/2026
+theo quy tắc thứ hạng (BTC 24h, top 8%): lợi thế lợi nhuận của maker (khớp khắt
+khe) còn **+2.4pp** (+56.9% so với +54.5%), nằm trong nhiễu của một backtest.
+Lý do thật để giữ maker là **đệm phí gấp đôi: +40.6% so với +22.2%** — đến từ số
+học phí, không từ giả định khớp lệnh. Chi tiết trong `docs/findings.md`.
 
 ## Cỡ lệnh theo xác suất: cũng không ăn thua, và biết rõ vì sao
 

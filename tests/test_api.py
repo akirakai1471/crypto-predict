@@ -123,3 +123,44 @@ def test_paper_positions_separates_resting_orders_from_positions(client):
     assert "pending" in body
     assert "open" in body
     assert body["execution"]["style"] in {"taker", "maker"}
+
+
+def test_health_says_the_scheduler_never_ran_when_there_is_no_heartbeat(client):
+    """Data age cannot stand in for this: the API never syncs bars itself."""
+    body = client.get("/api/health").json()
+    assert body["scheduler"]["state"] == "never_started"
+
+
+def test_health_reports_a_live_scheduler_from_its_heartbeat(tmp_path):
+    from cryptopred.serve import heartbeat
+
+    cfg = Config()
+    cfg.data.root = tmp_path
+    cfg.data.symbols = ["BTCUSDT"]
+    heartbeat.write(tmp_path / "heartbeat.json", "1h", {"predictions": 1})
+
+    sched = TestClient(create_app(cfg)).get("/api/health").json()["scheduler"]
+    assert sched["state"] == "alive"
+    assert sched["minutes_ago"] < 5
+    assert sched["last_cycle"]
+
+
+def test_alerts_are_served_verbatim_newest_first(tmp_path, monkeypatch):
+    from cryptopred.serve import alerts
+
+    monkeypatch.setattr(alerts.subprocess, "Popen", lambda *a, **k: None)
+    cfg = Config()
+    cfg.data.root = tmp_path
+    alerts.notify("BTCUSDT — model bắn LONG\nHồ sơ: đúng 7/15", tmp_path / "signals.log")
+    alerts.notify("BTCUSDT — model bắn SHORT\nHồ sơ: đúng 7/16", tmp_path / "signals.log")
+
+    body = TestClient(create_app(cfg)).get("/api/alerts").json()
+    assert [a["message"].splitlines()[0] for a in body["alerts"]] == [
+        "BTCUSDT — model bắn SHORT",
+        "BTCUSDT — model bắn LONG",
+    ]
+    assert "Hồ sơ: đúng 7/16" in body["alerts"][0]["message"]
+
+
+def test_alerts_are_empty_before_anything_has_fired(client):
+    assert client.get("/api/alerts").json() == {"alerts": []}

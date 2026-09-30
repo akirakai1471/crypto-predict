@@ -25,8 +25,9 @@ class Measured:
     n: int
     # Deliberately not named `ci95`. Some of these intervals are Wilson on
     # independent trials and really are 95%; others are block bootstraps whose
-    # measured coverage is nearer 80%. A field called `ci95` would state the
-    # stronger claim for both. `method` says which kind this one is.
+    # measured coverage is lower (MEASURED_COVERAGE in briefing/touch.py). A
+    # field called `ci95` would state the stronger claim for both. `method`
+    # says which kind this one is.
     interval: tuple[float, float] | None = None
     method: str = ""
 

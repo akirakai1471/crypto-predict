@@ -2,6 +2,7 @@
 not a generic instruction to be careful."""
 
 from cryptopred.ask.prompt import SYSTEM_PROMPT
+from cryptopred.briefing.touch import MEASURED_COVERAGE
 
 
 def test_it_forbids_numbers_that_did_not_come_from_a_tool():
@@ -27,7 +28,7 @@ def test_it_requires_saying_khong_do_duoc():
 def test_it_tells_the_model_the_interval_is_not_ninety_five_percent():
     """The model will otherwise reach for the number every reader assumes."""
     assert "95%" in SYSTEM_PROMPT
-    assert "80%" in SYSTEM_PROMPT
+    assert f"{MEASURED_COVERAGE:.0%}" in SYSTEM_PROMPT
 
 
 def test_it_is_not_so_long_it_dominates_the_cache():

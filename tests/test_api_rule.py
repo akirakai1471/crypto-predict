@@ -85,7 +85,9 @@ def test_api_serves_a_newly_saved_model_without_a_restart(tmp_path):
     )
 
     df = _learnable_dataset(n=2000)
-    result = train_fold(df.iloc[:1500], df.iloc[1500:], TrainConfig(num_boost_round=20))
+    result = train_fold(
+        df.iloc[:1500], df.iloc[1500:], TrainConfig(num_boost_round=20), horizon=24
+    )
     registry = ModelRegistry(tmp_path / "models")
     registry.save(
         result, symbol="BTCUSDT", interval="1h",

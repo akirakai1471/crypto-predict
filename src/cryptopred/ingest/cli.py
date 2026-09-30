@@ -155,6 +155,56 @@ def stats(config: Path = typer.Option(None, help="Path to a YAML config file."))
 
 
 @app.command()
+def vision(
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+    funding_too: bool = typer.Option(True, "--funding/--no-funding", help="Fetch funding too."),
+    current_month: bool = typer.Option(
+        False,
+        help=(
+            "Also fetch this month's bars from the daily files. Funding has no daily "
+            "archive, so those bars would carry last month's funding rate."
+        ),
+    ),
+    jobs: int = typer.Option(8, help="Symbols to download at once."),
+) -> None:
+    """Bulk history from data.binance.vision, checksum-verified.
+
+    For first downloads, and for places where the REST API answers HTTP 451.
+    Stops at the end of the last complete month unless --current-month; top up
+    the rest with `klines` and `funding` from a machine the API serves.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    import httpx
+
+    from cryptopred.ingest.vision import ingest_funding, ingest_klines
+
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    cfg = load_config(config)
+    store = ParquetStore(cfg.data.root / "raw")
+
+    def one(symbol: str) -> str:
+        # One client per thread: an httpx.Client is not meant to be shared
+        # across threads that each hold a connection open.
+        with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+            parts = []
+            for interval in cfg.data.intervals:
+                n = ingest_klines(
+                    client, store, symbol, interval, include_current_month=current_month
+                )
+                parts.append(f"{interval} +{n:,} bars")
+            if funding_too:
+                parts.append(f"funding +{ingest_funding(client, store, symbol):,}")
+        return f"  {symbol}: " + ", ".join(parts)
+
+    # Downloads wait on the network, not the CPU, so threads are enough here.
+    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        for line in pool.map(one, cfg.data.symbols):
+            typer.echo(line)
+    typer.echo("Done.")
+
+
+@app.command()
 def report(config: Path = typer.Option(None, help="Path to a YAML config file.")) -> None:
     """Print what is currently stored and any gaps."""
     cfg = load_config(config)

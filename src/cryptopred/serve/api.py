@@ -17,7 +17,11 @@ from fastapi.responses import FileResponse
 from cryptopred.config import Config, load_config
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.registry import ModelRegistry
+from cryptopred.news.store import NewsStore
+from cryptopred.news.tags import TAG_CAVEAT
 from cryptopred.paper.trader import PaperTrader
+from cryptopred.serve import heartbeat
+from cryptopred.serve.alerts import read_log
 from cryptopred.serve.drift import coverage_drift
 from cryptopred.serve.predictor import Predictor
 from cryptopred.serve.store import PredictionStore
@@ -38,6 +42,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         execution=cfg.strategy.execution_model(),
     )
     predictors: dict[tuple[str, str], Predictor] = {}
+    news = NewsStore(cfg.data.root / "news.db")
 
     def get_predictor(symbol: str, interval: str) -> Predictor:
         """Cached, but invalidated when a newer model is saved.
@@ -89,7 +94,24 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                         "minutes_behind": round(age, 1),
                     }
                 )
-        return {"ok": True, "data": status}
+        return {"ok": True, "data": status, "scheduler": _scheduler()}
+
+    def _scheduler() -> dict[str, Any]:
+        """Whether the scheduler is still completing cycles.
+
+        Bar freshness above cannot say this on its own: the API process never
+        syncs bars, so stale data looks the same whether the scheduler died or
+        Binance is slow, and it takes three hours to turn red at all.
+        """
+        beat = heartbeat.status(cfg.data.root / "heartbeat.json")
+        last = beat.get("last_cycle")
+        minutes = beat.get("minutes_ago")
+        return {
+            "state": beat["state"],
+            "detail": beat["detail"],
+            "last_cycle": last.isoformat() if last is not None else None,
+            "minutes_ago": round(minutes, 1) if minutes is not None else None,
+        }
 
     def _rule(symbol: str, interval: str) -> dict[str, Any]:
         """The cutoff the live system is actually applying, if a model is loaded."""
@@ -216,6 +238,40 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 "n_rested": rested,
                 "rested_share": (rested / len(closed)) if len(closed) else None,
             },
+        }
+
+    @app.get("/api/alerts")
+    def alerts(limit: int = 10) -> dict[str, Any]:
+        """What the scheduler announced, read back from data/signals.log.
+
+        The messages are served verbatim, track record and caveat included. A
+        dashboard that showed only "LONG" would be the alert without the part
+        that stops it reading as advice.
+        """
+        return {"alerts": read_log(cfg.data.root / "signals.log", limit=min(limit, 100))}
+
+    @app.get("/api/news")
+    def news_items(limit: int = 20, symbol: str = "", include_old: bool = False) -> dict[str, Any]:
+        """Newest headlines, as received, with the caveat in the same payload.
+
+        Every tag here is a keyword match nobody has validated, so the caveat
+        travels with the items - as /api/metrics carries its own - instead of
+        living only in the page that happens to render them. received_at is our
+        clock, not the publisher's; last_poll says whether anything is still
+        listening, since an empty list alone cannot. Headlines that were already
+        old when they arrived are left out unless include_old is set.
+        """
+        return {
+            "items": news.recent(
+                limit=max(1, min(limit, 200)),
+                symbol=symbol.strip().upper() or None,
+                include_old=include_old,
+            ),
+            "caveat": TAG_CAVEAT,
+            "tagging": "convention_unvalidated",
+            "last_poll": news.last_poll(),
+            "poll_seconds": cfg.news.poll_seconds,
+            "n_feeds": len(cfg.news.feeds),
         }
 
     @app.get("/api/config")

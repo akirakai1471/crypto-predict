@@ -281,3 +281,134 @@ def test_the_popup_never_swallows_the_unproven_caveat_silently(tmp_path, monkeyp
     message = "BTCUSDT — LONG\nHồ sơ: 7/15\n\nCHƯA CHỨNG MINH ĐƯỢC"
     alerts.notify(message, log_path=log)
     assert "CHƯA CHỨNG MINH" in log.read_text(encoding="utf-8")
+
+
+# -- wired into the cycle -----------------------------------------------------
+
+
+def test_a_signal_already_in_the_log_does_not_suppress_itself():
+    """The scheduler records a prediction, then asks whether to alert on it.
+
+    So the history it passes in holds this very row. Compared against itself, a
+    signal is always zero hours into its own horizon - which silenced every
+    alert, including the first one ever fired.
+    """
+    history = _history([("2026-09-26T06:00:00+00:00", 1, None)])
+    assert should_alert(
+        signal=1,
+        bar_close_time=pd.Timestamp("2026-09-26T06:00Z"),
+        history=history,
+        horizon_hours=24,
+    )
+
+
+class _Bundle:
+    metadata = {"margin_cutoff": 0.06}
+
+
+class _Predictor:
+    bundle = _Bundle()
+
+
+class _Trader:
+    def summary(self, symbol):
+        return {"equity": 9_971.0}
+
+
+def _fire(cfg, store, when, signal=1):
+    """What run_cycle does for one bar: record first, then consider alerting."""
+    from cryptopred.serve.predictor import Prediction
+    from cryptopred.serve.runner import _maybe_alert
+
+    proba = (0.2, 0.2, 0.6) if signal > 0 else (0.6, 0.2, 0.2)
+    prediction = Prediction(
+        symbol="BTCUSDT",
+        interval="1h",
+        bar_close_time=pd.Timestamp(when),
+        proba=proba,
+        signal=signal,
+        confidence=max(proba),
+        close_price=84_560.6,
+        model_version="v1",
+    )
+    store.record_prediction(
+        symbol="BTCUSDT",
+        interval="1h",
+        bar_close_time=prediction.bar_close_time,
+        proba=proba,
+        signal=signal,
+        close_price=prediction.close_price,
+        model_version="v1",
+    )
+    return _maybe_alert(
+        cfg=cfg,
+        symbol="BTCUSDT",
+        interval="1h",
+        prediction=prediction,
+        close_price=prediction.close_price,
+        horizon=24,
+        predictions=store,
+        trader=_Trader(),
+        predictor=_Predictor(),
+    )
+
+
+def test_the_cycle_alerts_on_a_fresh_signal_against_the_real_store(tmp_path, monkeypatch):
+    """End to end through SQLite, in the order the scheduler actually runs.
+
+    The unit tests above passed while this path alerted on nothing: they built
+    the history by hand, and the real one already contains the row being judged.
+    """
+    from cryptopred.config import Config
+    from cryptopred.serve import alerts
+    from cryptopred.serve.store import PredictionStore
+
+    monkeypatch.setattr(alerts.subprocess, "Popen", lambda *a, **k: None)
+    cfg = Config()
+    cfg.data.root = tmp_path
+    store = PredictionStore(tmp_path / "predictions.db")
+
+    assert _fire(cfg, store, "2026-09-26T06:00Z") == 1
+    assert _fire(cfg, store, "2026-09-26T07:00Z") == 0  # same episode
+    assert _fire(cfg, store, "2026-09-26T08:00Z", signal=-1) == 1  # a flip
+    assert _fire(cfg, store, "2026-09-27T07:00Z") == 1  # a new episode
+
+    log = (tmp_path / "signals.log").read_text(encoding="utf-8")
+    assert log.count("model bắn") == 3
+
+
+# -- reading the log back -----------------------------------------------------
+
+
+def test_the_log_reads_back_newest_first_and_verbatim(tmp_path, monkeypatch):
+    """The dashboard shows what was sent, caveat included, not a summary of it."""
+    from cryptopred.serve import alerts
+
+    monkeypatch.setattr(alerts.subprocess, "Popen", lambda *a, **k: None)
+    log = tmp_path / "signals.log"
+    alerts.notify("BTCUSDT — model bắn LONG\n\nCHƯA CHỨNG MINH ĐƯỢC", log_path=log)
+    alerts.notify("BTCUSDT — model bắn SHORT\n\nCHƯA CHỨNG MINH ĐƯỢC", log_path=log)
+
+    entries = alerts.read_log(log)
+    assert [e["message"].splitlines()[0] for e in entries] == [
+        "BTCUSDT — model bắn SHORT",
+        "BTCUSDT — model bắn LONG",
+    ]
+    assert all("CHƯA CHỨNG MINH ĐƯỢC" in e["message"] for e in entries)
+    assert all(e["written_at"].endswith("UTC") for e in entries)
+
+
+def test_reading_the_log_respects_the_limit(tmp_path, monkeypatch):
+    from cryptopred.serve import alerts
+
+    monkeypatch.setattr(alerts.subprocess, "Popen", lambda *a, **k: None)
+    log = tmp_path / "signals.log"
+    for i in range(5):
+        alerts.notify(f"alert {i}", log_path=log)
+    assert [e["message"] for e in alerts.read_log(log, limit=2)] == ["alert 4", "alert 3"]
+
+
+def test_a_missing_log_reads_as_no_alerts(tmp_path):
+    from cryptopred.serve.alerts import read_log
+
+    assert read_log(tmp_path / "never-written.log") == []

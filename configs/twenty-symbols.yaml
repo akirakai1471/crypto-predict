@@ -1,0 +1,32 @@
+# The twenty symbols of docs/preregistration-multisymbol.md, 1h only.
+#
+# For fetching their bars and running the pre-registered experiment:
+#   uv run cryptopred-ingest klines  --config configs/twenty-symbols.yaml
+#   uv run cryptopred-ingest funding --config configs/twenty-symbols.yaml
+#   uv run cryptopred-model experiment --config configs/twenty-symbols.yaml --jobs 0
+#
+# Not for the scheduler: the live system predicts BTCUSDT and ETHUSDT only.
+data:
+  symbols:
+    - BTCUSDT
+    - ETHUSDT
+    - SOLUSDT
+    - XRPUSDT
+    - ADAUSDT
+    - DOGEUSDT
+    - AVAXUSDT
+    - LINKUSDT
+    - DOTUSDT
+    - LTCUSDT
+    - BCHUSDT
+    - ATOMUSDT
+    - NEARUSDT
+    - APTUSDT
+    - ARBUSDT
+    - OPUSDT
+    - FILUSDT
+    - INJUSDT
+    - TRXUSDT
+    - ETCUSDT
+  intervals:
+    - 1h

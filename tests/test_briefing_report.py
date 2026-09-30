@@ -4,6 +4,7 @@ present a convention as a measurement."""
 import pandas as pd
 
 from cryptopred.briefing.report import format_brief
+from cryptopred.briefing.touch import MEASURED_COVERAGE
 from tests.conftest import make_ohlcv
 
 
@@ -44,7 +45,7 @@ def test_wait_times_say_which_sample_they_came_from():
 
 
 def test_the_interval_states_its_measured_coverage_and_disclaims_95():
-    """The block bootstrap measures ~80% coverage.
+    """The block bootstrap's coverage is measured, and it is not 95%.
 
     An earlier version of this test just asserted "95%" was absent, which review
     called out as guarding only against a hardcoded label - it would have passed
@@ -55,7 +56,7 @@ def test_the_interval_states_its_measured_coverage_and_disclaims_95():
     bars, now = _brief_input()
     text = format_brief("BTCUSDT", "1h", bars, pd.DataFrame(), now=now)
     assert "độ phủ" in text
-    assert "80%" in text
+    assert f"{MEASURED_COVERAGE:.0%}" in text
     assert "không phải 95%" in text
 
 

@@ -124,7 +124,7 @@ def oof_primary_proba(
     )
     for fold_id, (train_idx, test_idx) in enumerate(cv.split(dataset.index)):
         result = train_fold(
-            dataset.iloc[train_idx], dataset.iloc[test_idx], config.primary
+            dataset.iloc[train_idx], dataset.iloc[test_idx], config.primary, horizon=horizon
         )
         proba[test_idx] = result.proba
         mask[test_idx] = True
@@ -296,7 +296,7 @@ def walk_forward_meta(
         if meta_x.empty or meta_y.nunique() < 2:
             # Nothing to learn from: fall back to the primary alone rather than
             # inventing a filter.
-            result = train_fold(train, test, config.primary)
+            result = train_fold(train, test, config.primary, horizon=horizon)
             primary = signals_by_quantile(result.proba, config.primary_coverage)
             final_signals.append(primary)
             primary_signals.append(primary)
@@ -309,7 +309,7 @@ def walk_forward_meta(
             continue
 
         boosters = train_secondary_per_side(meta_x, meta_y, meta_w, config)
-        result = train_fold(train, test, config.primary)
+        result = train_fold(train, test, config.primary, horizon=horizon)
         primary = signals_by_quantile(result.proba, config.primary_coverage)
         final, _ = apply_meta(
             boosters, test, result.proba, list(meta_x.columns), config

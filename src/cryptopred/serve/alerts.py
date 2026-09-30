@@ -15,6 +15,7 @@ messages in eight hours would describe one bet as though it were eight.
 from __future__ import annotations
 
 import contextlib
+import re
 import subprocess
 from pathlib import Path
 
@@ -36,18 +37,26 @@ def should_alert(
     signal: int,
     bar_close_time: pd.Timestamp,
     history: pd.DataFrame,
-    horizon_hours: int,
+    horizon_hours: float,
 ) -> bool:
     """Is this signal the start of a new episode rather than a repeat?
 
     A same-direction signal inside the horizon is the same view held one bar
     longer: the position it opens overlaps the one already open. A flip is new
     information whenever it arrives.
+
+    Only signals strictly before this bar count as history. The scheduler
+    records a prediction before it considers alerting on it, so the log it
+    passes in already holds this very row - and a signal compared against
+    itself is always "inside the horizon", which silenced every alert.
     """
     if signal == 0:
         return False
 
+    now = pd.Timestamp(bar_close_time).tz_convert("UTC")
     prior = _signals(history)
+    if not prior.empty:
+        prior = prior[prior["t"] < now]
     if prior.empty:
         # An empty frame may carry no columns at all, so this guard has to come
         # before any column is indexed.
@@ -58,7 +67,6 @@ def should_alert(
         return True
 
     last = same["t"].iloc[-1]
-    now = pd.Timestamp(bar_close_time).tz_convert("UTC")
     return (now - last) >= pd.Timedelta(hours=horizon_hours)
 
 
@@ -160,6 +168,33 @@ def balloon_parts(message: str) -> tuple[str, str]:
     return title, body
 
 
+# Each entry in signals.log opens with "===== <stamp> =====" on a line of its own.
+_ENTRY_MARK = "====="
+_ENTRY_HEADER = re.compile(rf"^{_ENTRY_MARK} (.+?) {_ENTRY_MARK}$", re.MULTILINE)
+
+
+def read_log(log_path: Path, limit: int = 20) -> list[dict[str, str]]:
+    """The most recent alerts in signals.log, newest first.
+
+    The balloon is gone after eleven seconds, so anything that wants to show
+    what the model fired reads it back from here - the same text, caveat and
+    all, rather than a summary that could drift away from what was sent.
+    """
+    try:
+        text = Path(log_path).read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    headers = list(_ENTRY_HEADER.finditer(text))
+    entries = []
+    for i, header in enumerate(headers):
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
+        entries.append(
+            {"written_at": header.group(1), "message": text[header.end() : end].strip()}
+        )
+    return entries[::-1][: max(limit, 0)]
+
+
 def _ps_quote(value: str) -> str:
     """A PowerShell single-quoted string. Doubling the quote is the escape."""
     return "'" + value.replace("'", "''") + "'"
@@ -178,7 +213,7 @@ def notify(message: str, log_path: Path, popup: bool = True) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC")
     with log_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n===== {stamp} =====\n{message}\n")
+        handle.write(f"\n{_ENTRY_MARK} {stamp} {_ENTRY_MARK}\n{message}\n")
 
     if not popup:
         return

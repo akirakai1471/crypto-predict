@@ -25,7 +25,10 @@ from cryptopred.backtest.engine import CostModel, backtest
 from cryptopred.backtest.execution import ExecutionModel
 from cryptopred.backtest.sizing import size_from_confidence
 from cryptopred.backtest.sizing_report import match_exposure
-from cryptopred.models.selection import signals_by_quantile_per_fold
+from cryptopred.config import Config
+from cryptopred.dataset.builder import build_dataset
+from cryptopred.ingest.storage import ParquetStore
+from cryptopred.models.selection import realised_volatility, signals_by_quantile_per_fold
 from cryptopred.models.train import TrainConfig, walk_forward_evaluate
 from cryptopred.paper.replay import SideStats, two_sided_verdict
 
@@ -112,16 +115,45 @@ def evaluate_symbol(
     dataset: pd.DataFrame,
     bars: pd.DataFrame,
     config: FrozenConfig,
+    threads: int = 0,
+    train_overrides: dict[str, Any] | None = None,
 ) -> SymbolResult:
-    """Train and score one symbol under the frozen configuration."""
-    if len(bars) < MIN_BARS:
-        return SymbolResult(
-            symbol,
-            status=f"skipped: only {len(bars):,} bars, need {MIN_BARS:,}",
-        )
-    if dataset.empty:
-        return SymbolResult(symbol, status="skipped: dataset empty after cleaning")
+    """Train and score one symbol under the frozen configuration.
 
+    `threads` is compute, not configuration: LightGBM gives identical results at
+    any thread count, so it is left out of FrozenConfig on purpose.
+
+    `train_overrides` is for pre-registered experiments only (models/experiment.py):
+    fields of TrainConfig that one arm changes and the baseline does not.
+    """
+    if reason := _skip_reason(dataset, bars):
+        return SymbolResult(symbol, status=reason)
+
+    evaluation, index, fold_ids = _train(dataset, config, threads, train_overrides)
+    signals = signals_by_quantile_per_fold(
+        evaluation["proba"], fold_ids, coverage=config.coverage
+    )
+    return score_signals(
+        symbol, signals, index, dataset, bars, config,
+        log_loss=evaluation["model"]["log_loss"],
+    )
+
+
+def _skip_reason(dataset: pd.DataFrame, bars: pd.DataFrame) -> str | None:
+    if len(bars) < MIN_BARS:
+        return f"skipped: only {len(bars):,} bars, need {MIN_BARS:,}"
+    if dataset.empty:
+        return "skipped: dataset empty after cleaning"
+    return None
+
+
+def _train(
+    dataset: pd.DataFrame,
+    config: FrozenConfig,
+    threads: int = 0,
+    train_overrides: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], pd.Index, np.ndarray]:
+    """Walk-forward under the frozen configuration: (evaluation, test index, fold ids)."""
     evaluation = walk_forward_evaluate(
         dataset,
         n_splits=config.n_splits,
@@ -130,16 +162,70 @@ def evaluate_symbol(
             num_boost_round=config.rounds,
             calibration_method="oof",
             calibration_splits=config.calibration_splits,
+            num_threads=threads,
+            **(train_overrides or {}),
         ),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
     fold_ids = np.concatenate(
         [np.full(f["n_test"], f["fold"]) for f in evaluation["folds"]]
     )
-    signals = signals_by_quantile_per_fold(
-        evaluation["proba"], fold_ids, coverage=config.coverage
-    )
+    return evaluation, index, fold_ids
 
+
+# The window behind vol72 in docs/preregistration-cost-aware-selection.md.
+VOL_WINDOW = 72
+
+
+def evaluate_symbol_selection(
+    symbol: str,
+    dataset: pd.DataFrame,
+    bars: pd.DataFrame,
+    config: FrozenConfig,
+    threads: int = 0,
+) -> dict[str, SymbolResult]:
+    """Both selection rules on one trained model: {"margin": ..., "margin_x_vol": ...}.
+
+    Training once and selecting twice means the two arms share every
+    probability, so any difference between them is the rule's.
+    """
+    if reason := _skip_reason(dataset, bars):
+        skipped = SymbolResult(symbol, status=reason)
+        return {"margin": skipped, "margin_x_vol": skipped}
+
+    evaluation, index, fold_ids = _train(dataset, config, threads)
+    proba = evaluation["proba"]
+    log_loss = evaluation["model"]["log_loss"]
+    vol = realised_volatility(bars["close"], VOL_WINDOW).reindex(index).to_numpy()
+
+    by_margin = signals_by_quantile_per_fold(proba, fold_ids, coverage=config.coverage)
+    by_move = signals_by_quantile_per_fold(
+        proba, fold_ids, coverage=config.coverage, weight=vol
+    )
+    return {
+        "margin": score_signals(
+            symbol, by_margin, index, dataset, bars, config, log_loss=log_loss
+        ),
+        "margin_x_vol": score_signals(
+            symbol, by_move, index, dataset, bars, config, log_loss=log_loss
+        ),
+    }
+
+
+def score_signals(
+    symbol: str,
+    signals: np.ndarray,
+    index: pd.Index,
+    dataset: pd.DataFrame,
+    bars: pd.DataFrame,
+    config: FrozenConfig,
+    log_loss: float | None = None,
+) -> SymbolResult:
+    """Backtest one set of signals at normal and doubled costs, and judge it.
+
+    Separate from training so that two selection rules can be scored on the
+    same model's probabilities, which makes the rule the only difference.
+    """
     window = bars.loc[index.min() : index.max()]
     frame = pd.DataFrame({"signal": signals}, index=index)
     execution = config.execution()
@@ -172,8 +258,10 @@ def evaluate_symbol(
     forward = dataset.loc[index, "forward_return"].to_numpy()
     taken = signals != 0
     sign_acc = None
+    mean_abs_move = None
     if taken.any():
         sign_acc = float((np.sign(signals[taken]) == np.sign(forward[taken])).mean())
+        mean_abs_move = float(np.abs(forward[taken]).mean())
 
     return SymbolResult(
         symbol,
@@ -183,6 +271,7 @@ def evaluate_symbol(
             "n_signals": int(taken.sum()),
             "n_trades": base.summary.get("n_trades", 0),
             "sign_accuracy": sign_acc,
+            "mean_abs_move": mean_abs_move,
             "total_return": base.summary.get("total_return", 0.0),
             "max_drawdown": base.summary.get("max_drawdown", 0.0),
             "sharpe": base.summary.get("sharpe", 0.0),
@@ -194,6 +283,7 @@ def evaluate_symbol(
             "short_win_rate": short_s.win_rate,
             "short_pnl": short_s.total_pnl,
             "two_sided": verdict["decision"],
+            "log_loss": log_loss,
         },
     )
 
@@ -203,6 +293,7 @@ def evaluate_symbol_sizing(
     dataset: pd.DataFrame,
     bars: pd.DataFrame,
     config: FrozenConfig,
+    threads: int = 0,
 ) -> SymbolResult:
     """Fixed versus linear staking on one symbol, at equal average exposure.
 
@@ -227,6 +318,7 @@ def evaluate_symbol_sizing(
             num_boost_round=config.rounds,
             calibration_method="oof",
             calibration_splits=config.calibration_splits,
+            num_threads=threads,
         ),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
@@ -299,6 +391,40 @@ def evaluate_symbol_sizing(
             ),
         },
     )
+
+
+def run_symbol(
+    symbol: str,
+    cfg: Config,
+    interval: str,
+    config: FrozenConfig,
+    sizing: bool = False,
+    threads: int = 0,
+) -> SymbolResult:
+    """Load, build and evaluate one symbol from the store.
+
+    Everything a worker process needs arrives as arguments and the data is read
+    inside it, so twenty symbols can train at once without shipping twenty
+    datasets through a pipe.
+    """
+    parquet = ParquetStore(cfg.data.root / "raw")
+    bars = parquet.read("klines", symbol, interval)
+    if bars.empty:
+        return SymbolResult(symbol, status="skipped: no bars stored")
+
+    funding = parquet.read("funding", symbol, "8h")
+    dataset = build_dataset(
+        bars,
+        interval=interval,
+        horizon=config.horizon,
+        atr_period=cfg.labels.atr_period,
+        band_k=cfg.labels.band_k,
+        funding=funding if not funding.empty else None,
+        symbol=symbol,
+        feature_config=cfg.features,
+    )
+    evaluate = evaluate_symbol_sizing if sizing else evaluate_symbol
+    return evaluate(symbol, dataset, bars, config, threads=threads)
 
 
 def sizing_verdict(favoured: int, attempted: int) -> str:

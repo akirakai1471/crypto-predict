@@ -21,6 +21,7 @@ from cryptopred.serve.gapfill import fill_gaps
 from cryptopred.serve.predictor import Predictor
 from cryptopred.serve.scoring import score_pending
 from cryptopred.serve.store import PredictionStore
+from cryptopred.timeframes import interval_to_timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +84,10 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
                 entry_time = bars.index.max()
                 last_close = float(bars["close"].iloc[-1])
 
-                # The history is read BEFORE this signal is considered, so a
-                # signal never suppresses itself, and the record quoted in the
-                # alert is the record as of before this bet.
+                # This bar's row is already in the log by now. should_alert
+                # looks only at signals before this bar, so a signal never
+                # suppresses itself, and the row is unscored, so the record
+                # quoted in the alert is the record as of before this bet.
                 if prediction.signal != 0:
                     counts["alerts"] += _maybe_alert(
                         cfg=cfg,
@@ -165,11 +167,14 @@ def _maybe_alert(
     """
     try:
         history = predictions.history(symbol, interval, limit=100_000)
+        # The horizon is counted in bars; the episode window is wall-clock time.
+        # They coincide only on 1h bars.
+        horizon_hours = horizon * interval_to_timedelta(interval) / pd.Timedelta(hours=1)
         if not should_alert(
             signal=prediction.signal,
             bar_close_time=pd.Timestamp(prediction.bar_close_time),
             history=history,
-            horizon_hours=horizon,
+            horizon_hours=horizon_hours,
         ):
             return 0
 

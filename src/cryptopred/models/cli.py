@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import typer
 
+from cryptopred import parallel
 from cryptopred.backtest.breakeven import analyse, format_table, round_trip_cost
 from cryptopred.backtest.engine import CostModel
 from cryptopred.backtest.execution_report import compare_execution, format_execution_comparison
@@ -25,8 +26,17 @@ from cryptopred.backtest.sizing_report import (
     format_sizing_comparison,
 )
 from cryptopred.config import load_config
-from cryptopred.dataset.builder import build_dataset, dataset_path
+from cryptopred.dataset.builder import dataset_path
 from cryptopred.ingest.storage import ParquetStore
+from cryptopred.models.experiment import (
+    ARMS,
+    PREREGISTERED_SYMBOLS,
+    SELECTION_ARMS,
+    format_experiment,
+    format_selection_experiment,
+    run_arm_symbol,
+    run_selection_symbol,
+)
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.models.report import format_evaluation, verdict
 from cryptopred.models.selection import margin_cutoff, signals_by_quantile_per_fold
@@ -42,10 +52,9 @@ from cryptopred.models.train import (
 from cryptopred.models.validation import (
     FrozenConfig,
     SymbolResult,
-    evaluate_symbol,
-    evaluate_symbol_sizing,
     format_sizing_validation,
     format_validation,
+    run_symbol,
 )
 from cryptopred.report_io import emit
 
@@ -73,6 +82,9 @@ def train(
     horizon: int = typer.Option(
         None, help="Label horizon in bars, overriding the config."
     ),
+    jobs: int = typer.Option(
+        0, help="Processes to train folds in; 0 uses every core. Results match --jobs 1."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Evaluate walk-forward, print the report, and optionally save the model."""
@@ -95,7 +107,7 @@ def train(
 
     typer.echo(f"Training on {len(dataset):,} rows from {path.name} ...")
     evaluation = walk_forward_evaluate(
-        dataset, n_splits=n_splits, horizon=horizon, config=train_config
+        dataset, n_splits=n_splits, horizon=horizon, config=train_config, n_jobs=jobs
     )
 
     report = format_evaluation(evaluation, symbol=symbol, interval=interval, threshold=threshold)
@@ -302,6 +314,9 @@ def sweep(
     horizon: int = typer.Option(
         None, help="Label horizon in bars, overriding the config."
     ),
+    jobs: int = typer.Option(
+        0, help="Processes to train folds in; 0 uses every core. Results match --jobs 1."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Diagnostic: how signal count, accuracy and PnL vary with coverage.
@@ -335,6 +350,7 @@ def sweep(
         dataset,
         n_splits=n_splits,
         horizon=horizon,
+        n_jobs=jobs,
         config=TrainConfig(num_boost_round=rounds, calibrate=True),
     )
     test_index = dataset.index[-evaluation["n_test_total"] :]
@@ -390,6 +406,9 @@ def sizing(
     kelly_scale: float = typer.Option(
         0.5, help="Fraction of full Kelly to stake. Below 1 on purpose — see the module docs."
     ),
+    jobs: int = typer.Option(
+        0, help="Processes to train folds in; 0 uses every core. Results match --jobs 1."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Does betting more on stronger signals beat betting the same every time?
@@ -417,6 +436,7 @@ def sizing(
         dataset,
         n_splits=n_splits,
         horizon=horizon,
+        n_jobs=jobs,
         config=TrainConfig(num_boost_round=rounds),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
@@ -474,6 +494,9 @@ def execution(
     maker_fee: float = typer.Option(0.0002, help="Maker fee per side."),
     n_splits: int = typer.Option(5, help="Walk-forward folds."),
     rounds: int = typer.Option(400, help="LightGBM boosting rounds."),
+    jobs: int = typer.Option(
+        0, help="Processes to train folds in; 0 uses every core. Results match --jobs 1."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Do limit orders beat market orders once missed fills are counted?
@@ -506,6 +529,7 @@ def execution(
         dataset,
         n_splits=n_splits,
         horizon=horizon,
+        n_jobs=jobs,
         config=TrainConfig(num_boost_round=rounds),
     )
     index = dataset.index[-evaluation["n_test_total"] :]
@@ -541,6 +565,9 @@ def validate(
         "--sizing",
         help="Compare fixed against linear staking instead of running the pass gates.",
     ),
+    jobs: int = typer.Option(
+        0, help="Symbols to train at once; 0 uses every core. Results match --jobs 1."
+    ),
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Run the frozen configuration across many symbols and report the spread.
@@ -559,31 +586,18 @@ def validate(
     frozen = FrozenConfig()
     names = [s.strip() for s in symbols.split(",")] if symbols else cfg.data.symbols
 
-    parquet = ParquetStore(cfg.data.root / "raw")
-    results = []
-    for symbol in names:
-        typer.echo(f"  {symbol} ...")
-        bars = parquet.read("klines", symbol, interval)
-        if bars.empty:
-            results.append(SymbolResult(symbol, status="skipped: no bars stored"))
-            continue
+    workers, threads = parallel.plan(jobs, len(names))
+    typer.echo(f"  {len(names)} symbols, {workers} at a time ...")
 
-        funding = parquet.read("funding", symbol, "8h")
-        dataset = build_dataset(
-            bars,
-            interval=interval,
-            horizon=frozen.horizon,
-            atr_period=cfg.labels.atr_period,
-            band_k=cfg.labels.band_k,
-            funding=funding if not funding.empty else None,
-            symbol=symbol,
-            feature_config=cfg.features,
-        )
-        results.append(
-            evaluate_symbol_sizing(symbol, dataset, bars, frozen)
-            if sizing_arm
-            else evaluate_symbol(symbol, dataset, bars, frozen)
-        )
+    def progress(i: int, result: SymbolResult) -> None:
+        typer.echo(f"  {names[i]}: {result.status}")
+
+    results = parallel.run(
+        run_symbol,
+        [(symbol, cfg, interval, frozen, sizing_arm, threads) for symbol in names],
+        workers,
+        on_done=progress,
+    )
 
     report = (
         format_sizing_validation(results, frozen)
@@ -593,6 +607,113 @@ def validate(
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
     kind = "sizing" if sizing_arm else "validation"
     emit(report, cfg.data.root / "reports" / f"{kind}_{interval}_{stamp}.txt")
+
+
+@app.command()
+def experiment(
+    arms: str = typer.Option(
+        "baseline,recency,market_context",
+        help="Pre-registered arms to run. The baseline is needed to judge the others.",
+    ),
+    symbols: str = typer.Option(
+        None, help="Comma-separated symbols. Defaults to the twenty pre-registered ones."
+    ),
+    interval: str = typer.Option("1h", help="Bar interval."),
+    jobs: int = typer.Option(
+        0, help="Symbol-arm runs to train at once; 0 uses every core. Results match --jobs 1."
+    ),
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+) -> None:
+    """Run the changes in docs/preregistration-improvements.md against a baseline.
+
+    Only arms registered in that document can be run, with the values written
+    there. The verdict for each arm is the document's four-part rule, applied
+    mechanically; an arm that fails any part is rejected.
+    """
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    cfg = load_config(config)
+    names = [a.strip() for a in arms.split(",") if a.strip()]
+    unknown = [a for a in names if a not in ARMS]
+    if unknown:
+        typer.echo(
+            f"Unknown arm(s): {', '.join(unknown)}. Registered: {', '.join(ARMS)}. "
+            "A new arm needs its own pre-registration first."
+        )
+        raise typer.Exit(code=1)
+
+    symbol_list = (
+        [s.strip() for s in symbols.split(",")] if symbols else list(PREREGISTERED_SYMBOLS)
+    )
+    frozen = FrozenConfig()
+    tasks = [(sym, arm) for arm in names for sym in symbol_list]
+    workers, threads = parallel.plan(jobs, len(tasks))
+    typer.echo(
+        f"  {len(tasks)} runs ({len(names)} arms x {len(symbol_list)} symbols), "
+        f"{workers} at a time ..."
+    )
+
+    def progress(i: int, result: SymbolResult) -> None:
+        sym, arm = tasks[i]
+        typer.echo(f"  {arm:>15} {sym}: {result.status}")
+
+    flat = parallel.run(
+        run_arm_symbol,
+        [(sym, cfg, interval, frozen, arm, threads) for sym, arm in tasks],
+        workers,
+        on_done=progress,
+    )
+    by_arm = {
+        arm: flat[i * len(symbol_list) : (i + 1) * len(symbol_list)]
+        for i, arm in enumerate(names)
+    }
+    stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
+    emit(
+        format_experiment(by_arm),
+        cfg.data.root / "reports" / f"experiment_{interval}_{stamp}.txt",
+    )
+
+
+@app.command("selection-experiment")
+def selection_experiment(
+    symbols: str = typer.Option(
+        None, help="Comma-separated symbols. Defaults to the twenty pre-registered ones."
+    ),
+    interval: str = typer.Option("1h", help="Bar interval."),
+    jobs: int = typer.Option(
+        0, help="Symbols to train at once; 0 uses every core. Results match --jobs 1."
+    ),
+    config: Path = typer.Option(None, help="Path to a YAML config file."),
+) -> None:
+    """Run docs/preregistration-cost-aware-selection.md.
+
+    Each symbol is trained once, and its out-of-sample probabilities are used to
+    pick trades two ways: by directional margin, and by margin times recent
+    volatility. The verdict is the document's four-part rule, applied as written.
+    """
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    cfg = load_config(config)
+    symbol_list = (
+        [s.strip() for s in symbols.split(",")] if symbols else list(PREREGISTERED_SYMBOLS)
+    )
+    frozen = FrozenConfig()
+    workers, threads = parallel.plan(jobs, len(symbol_list))
+    typer.echo(f"  {len(symbol_list)} symbols, {workers} at a time ...")
+
+    def progress(i: int, result: dict[str, SymbolResult]) -> None:
+        typer.echo(f"  {symbol_list[i]}: {result['margin'].status}")
+
+    per_symbol = parallel.run(
+        run_selection_symbol,
+        [(sym, cfg, interval, frozen, threads) for sym in symbol_list],
+        workers,
+        on_done=progress,
+    )
+    by_arm = {arm: [r[arm] for r in per_symbol] for arm in SELECTION_ARMS}
+    stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
+    emit(
+        format_selection_experiment(by_arm),
+        cfg.data.root / "reports" / f"selection_experiment_{interval}_{stamp}.txt",
+    )
 
 
 @app.command()

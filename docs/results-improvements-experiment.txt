@@ -1,0 +1,47 @@
+============================================================
+PRE-REGISTERED EXPERIMENT — docs/preregistration-improvements.md
+============================================================
+Sign accuracy on the traded 8% of bars, per symbol and arm.
+
+    symbol          baseline         recency  market_context
+------------------------------------------------------------
+   BTCUSDT            55.76%          54.88%          56.25%
+   ETHUSDT            55.40%          51.89%          52.28%
+   SOLUSDT            51.45%          50.63%          53.96%
+   XRPUSDT            55.38%          53.11%          55.51%
+   ADAUSDT            57.09%          57.46%          57.59%
+  DOGEUSDT            55.99%          56.19%          56.75%
+  AVAXUSDT            52.54%          55.26%          54.59%
+  LINKUSDT            55.52%          52.88%          56.91%
+   DOTUSDT            54.44%          56.08%          53.31%
+   LTCUSDT            54.20%          54.56%          52.55%
+   BCHUSDT            55.86%          56.57%          57.30%
+  ATOMUSDT            51.07%          50.52%          49.96%
+  NEARUSDT            52.41%          50.37%          51.97%
+   APTUSDT            55.02%          55.38%          54.34%
+   ARBUSDT            53.37%          52.70%          53.98%
+    OPUSDT            54.79%          55.86%          56.36%
+   FILUSDT            57.51%          52.71%          56.95%
+   INJUSDT            51.08%          50.74%          51.65%
+   TRXUSDT            53.55%          53.60%          53.92%
+   ETCUSDT            56.44%          54.45%          55.94%
+
+------------------------------------------------------------
+recency: REJECTED
+  1. wins on most symbols   FAIL  9/20 better, 15 needed, sign-test p = 0.7483 (alpha 0.025)
+  2. by enough to matter    FAIL  mean -0.65% (needs +0.5%)
+  3. no gate passes lost    pass  5 vs 5 symbols passing all three gates
+  4. log loss not worse     pass  1.0206 vs 1.0208
+
+------------------------------------------------------------
+market_context: REJECTED
+  1. wins on most symbols   FAIL  12/20 better, 15 needed, sign-test p = 0.2517 (alpha 0.025)
+  2. by enough to matter    FAIL  mean +0.16% (needs +0.5%)
+  3. no gate passes lost    pass  8 vs 5 symbols passing all three gates
+  4. log loss not worse     pass  1.0170 vs 1.0208
+
+============================================================
+Twenty crypto symbols over one period are not twenty independent tests; the
+p-value is optimistic. An ADOPTED arm earns a place in the default config, not
+a proven edge. Record this result in docs/findings.md either way.
+============================================================

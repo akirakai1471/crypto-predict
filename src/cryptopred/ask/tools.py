@@ -22,7 +22,7 @@ from cryptopred.briefing.indicators import current_indicators
 from cryptopred.briefing.levels import daily_pivots, swing_levels
 from cryptopred.briefing.provenance import Measured, Unavailable
 from cryptopred.briefing.snapshot import market_snapshot
-from cryptopred.briefing.touch import touch_probability
+from cryptopred.briefing.touch import MEASURED_COVERAGE, touch_probability
 from cryptopred.config import Config
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.registry import ModelRegistry
@@ -78,7 +78,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "cỡ mẫu, khoảng bootstrap, và phân phối thời gian chờ. Đây là tool trả "
             "lời câu 'khi nào'. Nếu conditional là unavailable thì nói rõ là ô chế "
             "độ không đủ mẫu và dùng con số unconditional. Khoảng tin cậy có độ phủ "
-            "đo được khoảng 80%, KHÔNG phải 95% — đừng gọi nó là 95%."
+            f"đo được khoảng {MEASURED_COVERAGE:.0%}, KHÔNG phải 95% — đừng gọi nó là 95%."
         ),
         "strict": True,
         "input_schema": {

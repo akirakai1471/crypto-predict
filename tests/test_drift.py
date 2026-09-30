@@ -85,3 +85,32 @@ def test_only_the_most_recent_window_is_judged():
     drift = coverage_drift(_history(margins), "v1", cutoff=0.10, target=0.08, window=500)
     assert drift["n_rows"] == 500
     assert drift["state"] == "silent"
+
+
+def test_the_window_is_the_newest_bars_even_when_the_log_arrives_newest_first(tmp_path):
+    """PredictionStore.history returns newest first, and every caller passes it
+    straight in. A window taken off the end of that frame is the OLDEST bars:
+    past `window` rows the check would report a model's first weeks forever and
+    never see it go silent.
+    """
+    from cryptopred.serve.store import PredictionStore
+
+    store = PredictionStore(tmp_path / "predictions.db")
+    start = pd.Timestamp("2026-09-01T00:00Z")
+    for i in range(600):
+        fires = i < 500  # fired for 500 bars, then went quiet
+        proba = (0.1, 0.3, 0.6) if fires else (0.33, 0.33, 0.34)
+        store.record_prediction(
+            symbol="BTCUSDT",
+            interval="1h",
+            bar_close_time=start + pd.Timedelta(hours=i),
+            proba=proba,
+            signal=int(fires),
+            close_price=1.0,
+            model_version="v1",
+        )
+
+    history = store.history("BTCUSDT", "1h", limit=100_000)
+    drift = coverage_drift(history, "v1", cutoff=0.10, target=0.08, window=100)
+    assert drift["state"] == "silent"
+    assert "0 of 100" in drift["detail"]

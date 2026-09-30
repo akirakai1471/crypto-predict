@@ -19,6 +19,7 @@ and a monotone recalibration cannot change which bars are chosen.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 DOWN, FLAT, UP = 0, 1, 2
 
@@ -33,23 +34,41 @@ def signals_by_quantile(
     is a coin flip however large those numbers look, and using the maximum would
     rank it alongside a genuine 0.40-versus-0.10 call.
     """
+    return signals_by_score(proba, coverage, weight=None, allow_flat=allow_flat)
+
+
+def signals_by_score(
+    proba: np.ndarray,
+    coverage: float,
+    weight: np.ndarray | None = None,
+    allow_flat: bool = False,
+) -> np.ndarray:
+    """Trade the top `coverage` fraction of bars by margin, optionally times a
+    per-bar weight.
+
+    With no weight this is the rank rule. With `weight` set to expected move
+    size it ranks by expected return in the predicted direction instead - see
+    docs/preregistration-cost-aware-selection.md. A bar with no weight (NaN) is
+    not eligible: a score that cannot be computed is not a low score.
+    """
     if not 0 < coverage <= 1:
         raise ValueError(f"coverage must be in (0, 1], got {coverage}")
 
-    directional_margin = np.abs(proba[:, UP] - proba[:, DOWN])
+    score = np.abs(proba[:, UP] - proba[:, DOWN])
+    if weight is not None:
+        weight = np.asarray(weight, dtype=float)
+        score = np.where(np.isfinite(weight), score * weight, -np.inf)
     if not allow_flat:
         # A bar whose most likely outcome is FLAT is not a trade at any rank.
-        directional_margin = np.where(
-            proba.argmax(axis=1) == FLAT, -np.inf, directional_margin
-        )
+        score = np.where(proba.argmax(axis=1) == FLAT, -np.inf, score)
 
-    eligible = np.isfinite(directional_margin)
+    eligible = np.isfinite(score)
     n_take = int(round(coverage * len(proba)))
     n_take = min(n_take, int(eligible.sum()))
     if n_take <= 0:
         return np.zeros(len(proba), dtype=int)
 
-    cutoff_idx = np.argsort(directional_margin)[-n_take:]
+    cutoff_idx = np.argsort(score)[-n_take:]
     signal = np.zeros(len(proba), dtype=int)
     signal[cutoff_idx] = np.where(
         proba[cutoff_idx, UP] > proba[cutoff_idx, DOWN], 1, -1
@@ -57,8 +76,17 @@ def signals_by_quantile(
     return signal
 
 
+def realised_volatility(close: pd.Series, window: int = 72) -> pd.Series:
+    """Std of the last `window` one-bar log returns, known at each bar's close."""
+    returns = np.log(close.astype(float)).diff()
+    return returns.rolling(window, min_periods=window).std()
+
+
 def signals_by_quantile_per_fold(
-    proba: np.ndarray, fold_ids: np.ndarray, coverage: float
+    proba: np.ndarray,
+    fold_ids: np.ndarray,
+    coverage: float,
+    weight: np.ndarray | None = None,
 ) -> np.ndarray:
     """Apply the rank rule inside each fold separately.
 
@@ -69,7 +97,8 @@ def signals_by_quantile_per_fold(
     signal = np.zeros(len(proba), dtype=int)
     for fold in np.unique(fold_ids):
         mask = fold_ids == fold
-        signal[mask] = signals_by_quantile(proba[mask], coverage)
+        fold_weight = None if weight is None else np.asarray(weight)[mask]
+        signal[mask] = signals_by_score(proba[mask], coverage, weight=fold_weight)
     return signal
 
 
