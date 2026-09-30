@@ -12,6 +12,7 @@ from cryptopred.briefing.provenance import Measured, Unavailable
 from cryptopred.briefing.touch import (
     MIN_CELL_BARS,
     block_bootstrap_ci,
+    block_length,
     touch_probability,
 )
 from cryptopred.serve.status import wilson_interval
@@ -94,3 +95,69 @@ def test_wait_source_names_where_the_wait_time_came_from():
     )
     assert isinstance(healthy["conditional"], Measured)
     assert healthy["wait_source"] == "cell"
+
+
+def test_a_level_never_touched_still_gets_an_upper_bound():
+    """Zero touches in 500 bars is not proof the rate is zero.
+
+    The old interval returned (0, 0) here and covered a true 1.3% rate 47% of
+    the time. With ~10 effective blocks, the rule of three says the rate could
+    plausibly be as high as 3/10.
+    """
+    lo, hi = block_bootstrap_ci(np.zeros(500, dtype=bool), block=48)
+    assert lo == 0.0
+    assert hi == 3 / 11  # 500 bars in blocks of 48 is 11 blocks
+
+    lo, hi = block_bootstrap_ci(np.ones(500, dtype=bool), block=48)
+    assert (lo, hi) == (1 - 3 / 11, 1.0)
+
+
+def test_one_block_says_nothing_about_its_own_spread():
+    lo, hi = block_bootstrap_ci(np.array([True, False] * 20), block=48)
+    assert (lo, hi) == (0.0, 1.0)
+
+
+def test_the_interval_never_leaves_zero_to_one():
+    rng = np.random.default_rng(3)
+    touched = rng.random(600) < 0.03
+    lo, hi = block_bootstrap_ci(touched, block=48, n_boot=400)
+    assert 0.0 <= lo <= touched.mean() <= hi <= 1.0
+
+
+def test_few_blocks_give_a_wider_interval_than_the_percentile_method_did():
+    """The reason for studentizing. Ten block means say little about their own
+    spread, and an interval that ignores that is too narrow - measured at 77-81%
+    coverage for the percentile method at this sample size."""
+    rng = np.random.default_rng(4)
+    touched = np.repeat(rng.random(10) < 0.4, 50)  # 500 bars, 10 independent runs
+    lo, hi = block_bootstrap_ci(touched, block=48, n_boot=400, seed=1)
+
+    # The percentile version, as it was: resample circular blocks, take the
+    # 2.5% and 97.5% quantiles of the resampled means.
+    n_blocks = int(np.ceil(touched.size / 48))
+    means = []
+    for _ in range(400):
+        starts = rng.integers(0, touched.size, size=n_blocks)
+        idx = (starts[:, None] + np.arange(48)).ravel() % touched.size
+        means.append(touched[idx].mean())
+    p_lo, p_hi = np.quantile(means, [0.025, 0.975])
+    assert (hi - lo) > (p_hi - p_lo)
+
+
+def test_the_block_grows_with_the_sample_and_not_below_it():
+    assert block_length(24, 500) == 48
+    assert block_length(24, 100) == 48  # never shorter than the base
+    assert block_length(72, 500) == 144
+    assert block_length(24, 4000) == 96  # (4000/500)^(1/3) = 2
+    assert block_length(24, 60_000) > block_length(24, 4000)
+
+
+def test_a_full_history_sample_is_cheap_to_bootstrap():
+    """The unconditional figure runs on ~60,000 bars. Resampling block means
+    rather than copying the series keeps that to a small array per draw."""
+    import time
+
+    touched = np.random.default_rng(5).random(60_000) < 0.3
+    start = time.perf_counter()
+    block_bootstrap_ci(touched, block=block_length(72, touched.size), n_boot=1000)
+    assert time.perf_counter() - start < 5.0

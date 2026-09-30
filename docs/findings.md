@@ -209,7 +209,114 @@ passed both gates (+50.1% after costs, −16.6% drawdown, +18.4% at doubled
 costs, coverage 4.90% against an 8% target — still firing light, in the same
 direction as the drift).
 
+## The touch-probability interval, second pass: 85%, and where it still fails
+
+Date: 2026-09-30. The section below ended with "closing the remaining gap —
+studentized or bias-corrected bootstrap — was not attempted. It is open work."
+This is that work. The short version: the interval is better everywhere it was
+measured, the label moves from ≈80% to ≈85%, and one kind of market still
+breaks it, along with every other method tried.
+
+### What changed
+
+Two things, each measured before it was kept.
+
+**Studentized, not percentile.** The percentile bootstrap reads its interval
+straight off the spread of resampled means. At 500 bars and a 48-bar block that
+is the spread of eleven block means, treated as if it were known exactly. The
+studentized version scales each resample by its own standard error and reads the
+interval off those t-ratios, so a handful of blocks produces the heavier tails it
+should. A resample whose blocks all agree has a standard error of zero; its ratio
+is floored rather than dropped, because dropping those draws is what made rare
+targets under-cover.
+
+**The block grows with the sample**, as n^(1/3) above `MIN_CELL_BARS`. A fixed
+48-bar block was the dominant error at large n: bias, not noise, and only a
+longer block reduces bias. At 60,000 bars a 24-hour query now uses a 237-bar
+block, a 72-hour one 710.
+
+Plus one fix for an edge case the old code got badly wrong: **a level never
+touched in the sample** now gets a rule-of-three upper bound (3 / number of
+blocks) instead of the interval (0, 0). Zero touches in 500 bars is not
+evidence the rate is zero; the old interval covered a true 1.3% rate 47% of the
+time.
+
+### The measurement
+
+`scripts/touch_interval_coverage.py`, committed so it can be re-run, 800
+series per case, fixed seed. "old" is a frozen copy of the previous interval
+with its previous block; "new" is what `touch_probability` calls now.
+
+| model | n | true rate | old | **new** | new width |
+|---|---|---|---|---|---|
+| markov | 500 | 0.400 | 81.1% | **93.4%** | 0.48 |
+| markov | 3,000 | 0.400 | 85.0% | **91.1%** | 0.21 |
+| walk, −3% in 24h | 500 | 0.293 | 87.9% | **94.6%** | 0.32 |
+| walk, −3% in 24h | 3,000 | 0.293 | 90.6% | **92.6%** | 0.12 |
+| walk, −3% in 24h | 20,000 | 0.293 | 90.1% | **92.5%** | 0.05 |
+| walk, −3% in 72h | 500 | 0.543 | 80.4% | **90.2%** | 0.56 |
+| walk, −3% in 72h | 3,000 | 0.543 | 91.5% | **94.5%** | 0.23 |
+| walk, −3% in 72h | 20,000 | 0.543 | 91.4% | **94.0%** | 0.09 |
+| *rare: −8% in 24h* | 500 | 0.013 | 47.1% | **91.2%** | 0.16 |
+| *rare: −8% in 24h* | 3,000 | 0.013 | 83.0% | **96.0%** | 0.05 |
+| *regimes: −3% in 24h* | 500 | 0.264 | 52.9% | **69.6%** | 0.32 |
+| *regimes: −3% in 24h* | 3,000 | 0.264 | 58.6% | **68.5%** | 0.15 |
+| *regimes: −3% in 72h* | 500 | 0.491 | 66.1% | **78.8%** | 0.55 |
+| *regimes: −3% in 72h* | 3,000 | 0.491 | 78.2% | **85.1%** | 0.26 |
+
+"markov" is the two-state chain from the first measurement, kept so the two are
+comparable — and the old column reproduces it (81% and 85% here, 80% and 85%
+then). "walk" is new: real touch outcomes, computed exactly as `touch_outcomes`
+does, on a fat-tailed (t4) random walk at roughly BTC's hourly volatility. The
+dependence there comes from overlapping forward windows, which is where it comes
+from in the real data. Each figure is ±about 2pp at 800 reps.
+
+**New beats old in all fourteen cases.** Every gain is paid for in width, which
+is the point: the old interval was narrow because it was overconfident.
+
+### The label is 85%, not 90%
+
+The worst headline case in the table is 90.2%. The same case — walk, 72 hours,
+500 bars — measured 86.5% and 86.8% in two earlier runs of the same method on
+other seeds while this was being built. The label takes the lowest of those and
+rounds down for the noise: **≈85%**. That is what `MEASURED_COVERAGE` holds and
+what every string the user reads now says. Quoting the best run of three would
+be the exact habit this document exists to catch.
+
+The old label had the same problem in the other direction: its own method
+measures **80.4%** on the 72-hour walk, and 77.1% on another seed. "≈80%" was
+the Markov figure, and it was not the worst case.
+
+### Where it still fails
+
+**Volatility regimes that last for weeks** (rows in italics, "regimes": the walk
+with volatility switching between 0.4% and 1.0% an hour, each level held ~500
+bars). Touch outcomes then depend on each other over a far longer span than any
+block, and coverage falls to **69–85%**. The old interval did worse (53–78%) and
+nothing tried reached 90% without widening the interval to most of [0, 1]. A
+longer block helps a little, and so did fixed-b HAC and batch-means variants
+that were tried and not kept, but with six regime switches in 3,000 bars the
+sample simply does not contain the information. Crypto volatility does cluster for weeks, so this is
+not a corner case. Two things limit the damage, and neither removes it:
+
+- The **conditional** figure is less exposed than the unconditional one. Its
+  cell fixes the volatility bucket, so within a cell the regime that breaks the
+  interval is mostly held constant.
+- The rows are kept out of the 85% headline **because every method fails them**,
+  not because they do not matter. Averaging them in would produce one number
+  that describes neither case.
+
+So the honest reading of "≈85%" is: that is what the interval delivers when
+volatility is not in a long-lived regime shift. When it is, the interval is too
+narrow and there is currently no method here that fixes it.
+
+**Rare targets** are no longer a failure — 91% and 96% — but the reason is worth
+knowing. At 500 bars most samples of a 1.3% event contain no touch at all, and
+the rule-of-three bound is doing the work, not the bootstrap.
+
 ## The touch-probability interval covers 80%, not 95%
+
+*Superseded 2026-09-30 by the second pass above; kept as it was written.*
 
 Date: 2026-09-11 work, measured 2026-09-21. Recorded here because it is a
 property of a number this project reports, and because the honest version is

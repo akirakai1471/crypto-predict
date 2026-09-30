@@ -4,6 +4,8 @@ Generic caution does not survive contact with a confident-sounding table. This
 project's actual failures do, so they are named.
 """
 
+from cryptopred.briefing.touch import MEASURED_COVERAGE
+
 SYSTEM_PROMPT = """\
 Bạn trả lời câu hỏi về thị trường crypto cho một hệ thống đo lường, bằng tiếng Việt.
 
@@ -25,7 +27,7 @@ QUY TẮC CỨNG
 5. Nếu market_snapshot báo is_stale, câu trả lời phải nói rõ dữ liệu cũ bao
    nhiêu, ngay ở đầu.
 
-6. Khoảng tin cậy của xác suất chạm mức có độ phủ ĐO ĐƯỢC khoảng 80%, không phải
+6. Khoảng tin cậy của xác suất chạm mức có độ phủ ĐO ĐƯỢC khoảng {coverage}, không phải
    95%. Đừng gọi nó là "95%" — đó là con số người đọc sẽ tự mặc định, và nó sai.
 
 CÁCH TRẢ LỜI
@@ -54,4 +56,4 @@ LỊCH SỬ CỦA CHÍNH DỰ ÁN NÀY
 
 Mỗi con số đó trông như số và hành xử như câu văn. Công việc của bạn là không
 thêm cái thứ sáu vào danh sách.
-"""
+""".format(coverage=f"{MEASURED_COVERAGE:.0%}")

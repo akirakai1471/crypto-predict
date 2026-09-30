@@ -163,8 +163,11 @@ tới, chứ dự án này chưa đo chúng có giá trị dự báo hay không.
 
 Hai lưu ý đã dán sẵn trong output, đọc trước khi tin số:
 
-- Khoảng tin cậy có **độ phủ đo được ≈80%, không phải 95%** — xem mục tương ứng
-  trong `docs/findings.md` để biết đo thế nào.
+- Khoảng tin cậy có **độ phủ đo được ≈85%, không phải 95%** — và **thấp hơn
+  nhiều (69–85%) khi biến động đang ở một chế độ kéo dài nhiều tuần**. Mọi
+  phương pháp đã thử đều hụt ở trường hợp đó. Đo lại bằng
+  `uv run python scripts/touch_interval_coverage.py`; kết quả và cách đo ở mục
+  tương ứng trong `docs/findings.md`.
 - Nếu dữ liệu cũ, dòng đầu tiên nói rõ cũ bao nhiêu giờ.
 
 Hỏi tự do bằng tiếng Việt thì cần key Anthropic (`ant auth login` hoặc

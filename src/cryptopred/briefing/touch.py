@@ -70,41 +70,48 @@ def touch_outcomes(
 MIN_CELL_BARS = 500
 
 # This interval is NOT calibrated to 95% and must not be presented as one. It is
-# labelled "95%" because that is the nominal quantile cut (2.5% / 97.5%) used to
-# build it, in the same sense a t-test is still called a "95% CI" even though
-# its actual coverage depends on how well its assumptions hold. Here they hold
-# poorly: a percentile block-bootstrap on strongly autocorrelated data is known
-# to under-cover, and this project measured it rather than assuming it away.
+# built at the nominal 2.5% / 97.5% cut, in the same sense a t-test is still
+# called a "95% CI" even though its actual coverage depends on how well its
+# assumptions hold. Here they hold imperfectly, and this project measures that
+# rather than assuming it away.
 #
-# Harness: a two-state Markov chain with a known long-run "touched" rate of 0.4
-# and mean run length ~50 bars (state 1 mean run 40, state 0 mean run 60, giving
-# stationary P=0.4 and average run length 50). 800 independent realisations per
-# (n, block) cell, n_boot=400, checking how often the interval contains the
-# true 0.4. Measured on this module's circular block_bootstrap_ci (SE ~1-1.6pp
-# at 800 reps):
+# Measured with scripts/touch_interval_coverage.py, which is the harness: it
+# simulates series with a known true rate, builds this interval on each, and
+# counts how often the truth lands inside. Re-run it before changing anything
+# below; do not eyeball it. Results are recorded in docs/findings.md under
+# "The touch-probability interval".
 #
-#   n=3000 (large sample):  block=1  23%   block=24  75%   block=48  85%
-#                            block=72 89%   block=144 91%   block=200 91%
-#   n=500  (MIN_CELL_BARS):  block=24 73%   block=48  80%   block=72  80%
-#                            block=144 78%
+# Headline figure used in the strings this module returns: the worst case
+# measured across the harness's two dependence models (a two-state Markov
+# chain, and real touch outcomes on a fat-tailed random walk) at MIN_CELL_BARS
+# and larger samples, with the block sizes touch_probability uses. That was a
+# 72-hour query on 500 bars, at 86.5%, 86.8% and 90.2% on three seeds; the
+# label takes the lowest and rounds down for the ~2pp noise.
 #
-# Switching from a non-circular to a circular bootstrap (positions wrapped
-# modulo n so every position is drawn equally often, fixing the ~15x
-# under-sampling of the first/last `block` positions that a non-circular
-# window has - Künsch 1989) was checked directly against a non-circular clone
-# on identical draws: it helps, but only modestly (roughly +1-4 percentage
-# points, bigger at small n where the edge zone is a larger share of the
-# series) and it does NOT close the gap to 95% at any n or block tested here.
-# The dominant remaining shortfall is the known low-order bias of a plain
-# percentile block-bootstrap under strong dependence, which this change does
-# not attempt to fix.
-#
-# Conservative headline figure used in the strings this module returns to
-# callers: 80%, the worst case actually measured at MIN_CELL_BARS-sized cells
-# with the block sizes this module uses by default (block=48 and block=144,
-# see the floor formula in touch_probability). Re-run coverage_harness-style
-# measurement before changing this constant; do not eyeball it.
-MEASURED_COVERAGE = 0.80
+# One situation falls outside that figure and is documented instead of averaged
+# in, because every method tried fails it, not just this one: volatility regimes
+# that persist for weeks, which make touch outcomes dependent over far longer
+# than any block. Coverage there measured 69-85%. The regime-conditional figure
+# is less exposed than the unconditional one, since its cell fixes the regime.
+MEASURED_COVERAGE = 0.85
+
+
+def block_length(horizon: int, n: int) -> int:
+    """How many consecutive outcomes each bootstrap block keeps together.
+
+    Consecutive touch outcomes share horizon-1 of their horizon forward bars,
+    so the dependence runs at least `horizon` bars. A block of exactly that
+    under-covers; twice it, floored at 48 so short horizons do not get a
+    degenerate block, was measured to do better at every horizon tried.
+
+    It then grows with the sample as n^(1/3), the textbook rate for block
+    length. A fixed block is too short for a large sample: its bias, not its
+    noise, is what leaves the interval narrow, and only a longer block reduces
+    it. Measured at n=3,000 this lifted coverage on every dependence model in
+    scripts/touch_interval_coverage.py. Below MIN_CELL_BARS it is left alone.
+    """
+    base = max(2 * horizon, 48)
+    return int(round(base * max(1.0, (n / MIN_CELL_BARS) ** (1 / 3))))
 
 
 def block_bootstrap_ci(
@@ -113,36 +120,68 @@ def block_bootstrap_ci(
     n_boot: int = 1000,
     seed: int = 0,
 ) -> tuple[float, float]:
-    """A block-bootstrap interval that survives autocorrelation better than
-    Wilson does, but is not a calibrated 95% interval. See MEASURED_COVERAGE
-    above for what it actually delivers and how that was measured.
+    """A studentized circular block-bootstrap interval for the touch rate.
 
-    Resamples contiguous blocks rather than individual outcomes, so the
-    dependence between neighbouring windows is preserved instead of being
-    assumed away. A Wilson interval on the same data reports roughly the width
-    it would have if every window were an independent trial, which is wrong by
-    a factor of several here — but "wider than Wilson" is not the same claim
-    as "95% coverage", and this interval only supports the first one.
+    Blocks, because consecutive touch outcomes share almost all their forward
+    bars: a Wilson interval would report the width of that many independent
+    trials, which is wrong by a factor of several. Circular, so every position is
+    drawn equally often rather than the first and last `block` positions being
+    under-sampled (Künsch 1989).
 
-    Circular: block start positions range over the whole series and wrap with
-    `% n`, so every position is equally likely to be drawn, rather than the
-    first/last `block` positions being drawn far less often than interior ones
-    (see MEASURED_COVERAGE for the measured effect of this).
+    Studentized, because the plain percentile version under-covers when there
+    are few effective blocks: it treats the spread of ten block means as if it
+    were known exactly. Each resample here is scaled by its own standard error,
+    and the interval is read off the distribution of those t-ratios, so a small
+    number of blocks produces the heavier tails it should. See MEASURED_COVERAGE
+    for what this delivers and how it was measured - it is not 95%.
     """
-    n = len(touched)
+    t = np.asarray(touched, dtype=float)
+    n = len(t)
     if n == 0:
         return (0.0, 1.0)
     block = max(1, min(block, n))
-    rng = np.random.default_rng(seed)
     n_blocks = int(np.ceil(n / block))
-    offsets = np.arange(block)
+    mean = float(t.mean())
+    if n_blocks < 2:
+        # One block holds no information about its own spread.
+        return (0.0, 1.0)
 
-    means = np.empty(n_boot, dtype=float)
-    for b in range(n_boot):
-        starts = rng.integers(0, n, size=n_blocks)
-        idx = (starts[:, None] + offsets).ravel()[:n] % n
-        means[b] = touched[idx].mean()
-    return (float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975)))
+    # The mean of every circular block, from a single cumulative sum, so a
+    # resample is just a choice of block starts - no per-draw copy of the series.
+    wrapped = np.concatenate([t, t[: block - 1]])
+    csum = np.concatenate([[0.0], np.cumsum(wrapped)])
+    block_means = (csum[block:] - csum[:-block]) / block
+    se = float(block_means.std(ddof=1) / np.sqrt(n_blocks))
+    if se == 0.0:
+        return _no_variation_interval(mean, n_blocks)
+
+    rng = np.random.default_rng(seed)
+    draws = block_means[rng.integers(0, n, size=(n_boot, n_blocks))]
+    mean_star = draws.mean(axis=1)
+    se_star = draws.std(axis=1, ddof=1) / np.sqrt(n_blocks)
+    # A resample whose blocks all agree has a standard error of zero and an
+    # infinite t-ratio. The floor keeps those draws in the distribution - they
+    # are real information about how lopsided the sample can look - without
+    # letting one of them decide the whole interval.
+    t_star = (mean_star - mean) / np.maximum(se_star, se / np.sqrt(n_blocks))
+    q_lo, q_hi = np.quantile(t_star, [0.025, 0.975])
+    return (max(0.0, mean - q_hi * se), min(1.0, mean - q_lo * se))
+
+
+def _no_variation_interval(mean: float, n_blocks: int) -> tuple[float, float]:
+    """Every block agrees: the level was touched always, or never.
+
+    A zero-width interval would claim certainty from what may be ten effective
+    observations. The rule of three - a 95% bound of 3/n for zero events in n
+    independent trials - applied to the blocks, which are what is roughly
+    independent here, keeps the answer honest about how little was seen.
+    """
+    reach = min(1.0, 3.0 / n_blocks)
+    if mean <= 0.0:
+        return (0.0, reach)
+    if mean >= 1.0:
+        return (1.0 - reach, 1.0)
+    return (mean, mean)
 
 
 def touch_probability(
@@ -169,15 +208,8 @@ def touch_probability(
             "wait_source": "unconditional",
         }
 
-    # The dependence length between consecutive touch outcomes is about
-    # `horizon` bars (they share horizon-1 of horizon forward bars). A block
-    # equal to that length is measured to under-cover (see MEASURED_COVERAGE
-    # above); doubling it materially improves coverage at horizon=24 — the
-    # most common query — at both large-n and MIN_CELL_BARS-sized samples,
-    # and is neutral (no measured regression) at horizon=72. The floor of 48
-    # keeps short horizons from using a degenerately small block.
-    block = max(2 * horizon, 48)
     coverage_note = f"độ phủ đo được ≈{MEASURED_COVERAGE:.0%}, không phải 95%"
+    block = block_length(horizon, touched.size)
     unconditional = Measured(
         value=float(touched.mean()),
         n=int(touched.size),
@@ -220,11 +252,15 @@ def touch_probability(
         wait_inputs = (touched, bars_to)
         wait_source = "unconditional"
     else:
+        cell_block = block_length(horizon, cell_touched.size)
         conditional = Measured(
             value=float(cell_touched.mean()),
             n=int(cell_touched.size),
-            interval=block_bootstrap_ci(cell_touched, block=block, n_boot=n_boot),
-            method=f"nến cùng chế độ '{cell.label}', bootstrap khối {block} nến ({coverage_note})",
+            interval=block_bootstrap_ci(cell_touched, block=cell_block, n_boot=n_boot),
+            method=(
+                f"nến cùng chế độ '{cell.label}', bootstrap khối {cell_block} nến "
+                f"({coverage_note})"
+            ),
         )
         wait_inputs = (cell_touched, cell_bars_to)
         wait_source = "cell"
