@@ -1091,3 +1091,20 @@ portfolio bar by bar, so total exposure never exceeds 100%. The corrected
 4-hour figure is +34.0%, not +180.65%. Every number in this document comes from
 the corrected engine. `tests/test_backtest.py` has a regression test that fails
 if serial compounding ever returns.
+
+### Calibration purged 24 bars at every horizon (found 2026-09-30)
+
+`train_fold` defaulted `horizon` to 24, and the walk-forward evaluator and all
+three meta-labelling call sites never passed the real one. The horizon sets the
+purge inside out-of-fold calibration, so the 48- and 72-hour experiments in
+"Longer horizons" calibrated on inner folds whose training labels reached up to
+48 bars into their own test windows. Their calibrated probabilities were
+therefore somewhat optimistic.
+
+The 24-hour configuration — the only one deployed, validated across twenty
+symbols, or quoted as a result — used 24 by coincidence and is unaffected. The
+bias could only have flattered the longer horizons, and they were rejected
+anyway (both one-sided at 48h, and BTC's 48h edge not significant), so correcting
+it is not expected to reverse those verdicts. That is an expectation, not a
+measurement: they have not been re-run. `horizon` is now a required argument,
+with a regression test.

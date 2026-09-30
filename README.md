@@ -324,7 +324,7 @@ có khớp ~63% không, việc chấm điểm có chạy không.
 uv run pytest
 ```
 
-598 test, chạy hoàn toàn offline (5 test cần kho dữ liệu thật sẽ tự bỏ qua nếu
+619 test, chạy hoàn toàn offline (5 test cần kho dữ liệu thật sẽ tự bỏ qua nếu
 chưa tải). Quan trọng nhất là `tests/test_leakage.py`:
 6 test chặn rò rỉ dữ liệu tương lai. **Nếu bộ này đỏ, mọi con số trong dự án đều
 vô nghĩa** — sửa rò rỉ trước, đừng train.
@@ -353,6 +353,53 @@ vô nghĩa** — sửa rò rỉ trước, đừng train.
 5. Accuracy out-of-sample > 60% ở khung giờ = **coi như có bug** cho tới khi
    chứng minh ngược lại.
 6. Mọi tỉ lệ hiển thị kèm cỡ mẫu.
+
+## Train song song
+
+Mọi lệnh train giờ chạy song song trên mọi nhân CPU — mặc định `--jobs 0`:
+
+```bash
+uv run cryptopred-model validate --jobs 0
+```
+
+`train`, `sweep`, `sizing`, `execution` chạy các fold cùng lúc; `validate` và
+`experiment` chạy nhiều coin cùng lúc. **Kết quả không đổi một chữ số**: LightGBM
+cho dự đoán giống hệt ở 1, 2 hay 4 luồng, có test ép fold song song phải bằng
+fold tuần tự, và báo cáo 4 coin chạy hai kiểu diff ra giống hệt. Chạy song song
+chỉ đổi thời gian: 148 giây → 82 giây trên máy 4 nhân; máy nhiều nhân hơn và
+nhiều coin hơn thì chênh lệch lớn hơn. `--jobs 1` về lại chạy tuần tự.
+
+Song song bằng **tiến trình**, không bằng luồng, vì đó là chỗ thời gian bị phí:
+một model LightGBM 4 luồng chỉ nhanh hơn 1 luồng 2,3 lần trên 4 nhân.
+
+## Thử cải tiến model — đăng ký trước, rồi mới chạy
+
+"Nhạy hơn" ở dự án này **không** được phép nghĩa là bắn nhiều tín hiệu hơn —
+bảng hoà vốn đã cho thấy điều đó thua phí. Nghĩa khả thi là: **thích nghi nhanh
+hơn khi thị trường đổi chế độ, vẫn giao dịch đúng 8% số nến**. Hai thay đổi, mỗi
+cái một giá trị, được ghi vào `docs/preregistration-improvements.md` và commit
+**trước khi** chạy trên dữ liệu thật:
+
+| Phương án | Thay đổi |
+|---|---|
+| `recency` | Dữ liệu gần nặng ký hơn: nửa trọng số sau mỗi 8.760 nến (1 năm) |
+| `market_context` | 5 feature từ BTC cùng thời điểm đóng nến (ETH cho chính BTC) |
+
+```bash
+uv run cryptopred-model experiment --jobs 0
+```
+
+Chạy cả hai cùng baseline trên 20 coin, rồi áp **máy móc** luật đã ghi: chỉ nhận
+nếu thắng baseline ở ≥15/20 coin, trung bình +0,5 điểm %, không mất coin nào qua
+cổng, và log loss không tệ hơn. Trượt một điều là loại, và mặc định không đổi.
+
+Vì sao phải khắt khe vậy: chạy thử trên 4 coin **dữ liệu ngẫu nhiên**, phương án
+`recency` cho trung bình **+0,82 điểm %** — trông như cải tiến, nhưng là nhiễu
+thuần tuý vì dữ liệu không có gì để đoán. Chỉ nhìn con số trung bình là sẽ nhận
+nhầm. Ba điều kiện còn lại đã loại nó.
+
+Kết quả thật, dù đạt hay trượt, sẽ được ghi vào `docs/findings.md`. Không phương
+án nào thay đổi model đang chạy cho tới khi qua luật đó và được train lại bằng tay.
 
 ## Kiểm chứng trên 20 coin — cấu hình đóng băng
 
