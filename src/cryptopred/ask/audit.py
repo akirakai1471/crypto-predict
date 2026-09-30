@@ -14,15 +14,44 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Bare integers below this are structure — "trong 24 giờ", "3 mức" — not
-# measurements. The bound is deliberately low: a price or a percentage worth
-# auditing is almost never a small round integer, and every figure above it is
-# checked regardless of shape.
+# A bare integer below this can be sentence structure — "trong 24 giờ",
+# "3 mức", the 14 in "RSI-14" — but only when the words around it say so
+# (_STRUCTURE_AFTER, _PERIOD_BEFORE). "RSI đang ở 85" is a claim, and exempting
+# every small integer let it through unchecked.
 TRIVIAL_BELOW = 100.0
 
 # A figure matches a tool value if it is within this relative distance, which
-# covers rounding and unit-of-percent differences.
+# covers rounding.
 REL_TOLERANCE = 0.02
+
+# Every tool reports rates as fractions (0.352, never 35.2). So a figure written
+# as a percentage may only match a tool value times 100, and a bare figure only
+# the value itself. Matching either way round against every number let "60%"
+# pass on the strength of a 61-hour wait time.
+_PERCENT_AFTER = re.compile(r"\s?(?:%|phần\s+trăm|percent)", re.IGNORECASE)
+
+# Scale words after a figure: "90K", "70 nghìn", "1,2 triệu". Without them
+# "90K" was audited as 90.
+_SCALE_AFTER = re.compile(
+    r"\s?(k|nghìn|ngàn|triệu|tr|m|tỷ|tỉ|b)(?![a-zà-ỹđ])", re.IGNORECASE
+)
+_SCALES = {
+    "k": 1e3, "nghìn": 1e3, "ngàn": 1e3,
+    "triệu": 1e6, "tr": 1e6, "m": 1e6,
+    "tỷ": 1e9, "tỉ": 1e9, "b": 1e9,
+}
+
+# Units that make a small integer a count or a duration rather than a reading.
+_STRUCTURE_AFTER = re.compile(
+    r"\s?(?:giờ|tiếng|h\b|ngày|nến|tuần|tháng|năm|phút|mức|lần|coin|cặp|bước|"
+    r"nguồn|kịch bản|trường hợp|chỉ báo|ô\b|nhóm)",
+    re.IGNORECASE,
+)
+# An indicator's period: the 14 in "RSI-14", "RSI 14", "EMA20", "MACD(12".
+# Upper-case only - indicator names are acronyms, and "khoảng 35" is a claim.
+_PERIOD_BEFORE = re.compile(r"\b[A-Z]{2,}[-\s(]?$")
+# A list number at the start of a line: "1." or "2)".
+_LIST_ITEM = re.compile(r"(?:^|\n)\s*$")
 
 LIMITATION = (
     "Chỉ kiểm được con số. Không kiểm được câu định tính như "
@@ -30,11 +59,15 @@ LIMITATION = (
 )
 
 _NUMBER = re.compile(r"-?\d[\d.,]*\d|-?\d")
+# Vietnamese: dots group thousands, a comma is the decimal ("2.500", "84.560,6").
+_VI_GROUPED = re.compile(r"^\d{1,3}(?:\.\d{3})+(?:,\d+)?$")
+# English: commas group thousands, a dot is the decimal ("2,500", "84,560.6").
+_EN_GROUPED = re.compile(r"^\d{1,3}(?:,\d{3})+(?:\.\d+)?$")
 
 # A date is not a claim about the market. Without this the year in "ngày
 # 21/09/2026" is flagged as unsourced, and an audit that cries wolf on a true
 # statement spends the credibility of the one signal this feature rests on.
-_DATE = re.compile(r"\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2}")
+_DATE = re.compile(r"\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2}|\b\d{1,2}:\d{2}\b")
 
 
 def _parse(token: str) -> list[float]:
@@ -49,10 +82,15 @@ def _parse(token: str) -> list[float]:
     between runs. When nothing matches, the Vietnamese reading is the one to
     show the user.
     """
-    candidates = [
-        token.replace(".", "").replace(",", "."),  # Vietnamese: . groups, , decimal
-        token.replace(",", ""),                    # English: , groups, . decimal
-    ]
+    sign, digits = ("-", token[1:]) if token.startswith("-") else ("", token)
+    candidates = []
+    # A reading counts only if its thousands separators group digits in threes.
+    # "0,61" has no English reading: taking it as 061 once matched a 61-hour
+    # wait time.
+    if "." not in digits or _VI_GROUPED.match(digits):
+        candidates.append(sign + digits.replace(".", "").replace(",", "."))
+    if "," not in digits or _EN_GROUPED.match(digits):
+        candidates.append(sign + digits.replace(",", ""))
     out: list[float] = []
     for candidate in candidates:
         try:
@@ -72,59 +110,86 @@ def extract_numbers(text: str) -> list[float]:
     return values
 
 
-def _matches(figure: float, tool_numbers: list[float]) -> bool:
-    """Is this figure one of the tool's numbers, allowing for rounding and for
-    a fraction being written as a percentage?"""
+def _matches(figure: float, tool_numbers: list[float], percent: bool = False) -> bool:
+    """Is this figure one of the tool's numbers, allowing for rounding?
+
+    A percentage is compared with tool values times 100 and nothing else; a
+    bare figure with tool values as they are and nothing else.
+    """
     for value in tool_numbers:
-        for scaled in (value, value * 100.0, value / 100.0):
-            if scaled == 0:
-                if figure == 0:
-                    return True
-                continue
-            if abs(figure - scaled) / abs(scaled) <= REL_TOLERANCE:
+        target = value * 100.0 if percent else value
+        if target == 0:
+            if figure == 0:
                 return True
+            continue
+        if abs(figure - target) / abs(target) <= REL_TOLERANCE:
+            return True
     return False
 
 
 def _is_percentage(answer: str, end: int) -> bool:
-    """Is the figure ending at `end` written as a percentage?
+    """Is the figure ending at `end` written as a percentage - "%", "phần trăm",
+    with or without a space before it?"""
+    return _PERCENT_AFTER.match(answer, end) is not None
 
-    Allows one space, because "31.2 %" is as common as "31.2%" in Vietnamese
-    prose and the two must be treated alike.
-    """
-    return answer[end : end + 2].lstrip().startswith("%")
+
+def _scale(answer: str, end: int) -> tuple[float, int]:
+    """(multiplier, end of the scale word) for "90K", "70 nghìn"; (1, end) if none."""
+    found = _SCALE_AFTER.match(answer, end)
+    if found is None:
+        return 1.0, end
+    return _SCALES[found.group(1).lower()], found.end()
+
+
+def _is_structure(answer: str, start: int, end: int) -> bool:
+    """Does the text around a small integer mark it as a count, a duration,
+    an indicator period or a list number rather than a reading?"""
+    before = answer[max(0, start - 12) : start]
+    return (
+        _STRUCTURE_AFTER.match(answer, end) is not None
+        or _PERIOD_BEFORE.search(before) is not None
+        or (
+            _LIST_ITEM.search(before) is not None
+            and answer[end : end + 1] in (".", ")")
+        )
+    )
 
 
 def audit_answer(answer: str, tool_numbers: list[float]) -> dict[str, Any]:
     """Match every figure in the answer against the numbers tools returned."""
     matched: list[float] = []
     unmatched: list[float] = []
+    # U+2212 is how a typeset minus arrives; without this "−1,18%" read as +1.18.
+    answer = answer.replace("−", "-")
     date_spans = [m.span() for m in _DATE.finditer(answer)]
 
     for match in _NUMBER.finditer(answer):
         if any(start <= match.start() < end for start, end in date_spans):
             continue
 
-        readings = _parse(match.group())
-        if not readings:
+        base = _parse(match.group())
+        if not base:
             continue
+        multiplier, after = _scale(answer, match.end())
+        percent = multiplier == 1.0 and _is_percentage(answer, match.end())
+        readings = [r * multiplier for r in base]
 
-        hit = next((r for r in readings if _matches(r, tool_numbers)), None)
+        hit = next((r for r in readings if _matches(r, tool_numbers, percent)), None)
         if hit is not None:
             matched.append(hit)
             continue
 
-        # Nothing matched. A small bare integer is sentence structure rather
-        # than a claim; anything larger is a figure the reader could act on.
-        #
-        # A percentage is never structure, whatever its size. "60%" against a
-        # measured 58.4% is wrong by more than the tolerance and is exactly the
-        # kind of number this audit exists to catch — it was slipping through
-        # only for want of a decimal point.
-        trivial = all(
+        # Nothing matched. A small bare integer may be sentence structure - but
+        # only when the words around it say so. A percentage, a scaled figure or
+        # an unexplained integer is a claim the reader could act on.
+        small_integer = multiplier == 1.0 and all(
             abs(r) < TRIVIAL_BELOW and float(r).is_integer() for r in readings
         )
-        if trivial and not _is_percentage(answer, match.end()):
+        if (
+            small_integer
+            and not percent
+            and _is_structure(answer, match.start(), after)
+        ):
             continue
         unmatched.append(readings[0])
 
