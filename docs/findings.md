@@ -117,6 +117,11 @@ in-sample cutoff producing 3.2% coverage against an 8% target — a 2.5x shortfa
 that the old tolerance waved through. Sampling noise on a 1,000-bar check is
 about ±1.3x at two sigma, so 2.0 is comfortably outside noise.
 
+> **2026-10-01: that noise estimate was wrong.** It assumed independent bars;
+> signals come in runs, and measured on out-of-fold margins a sound model
+> strays past 2x on 41% of 1,000-bar blocks. The tolerance is now 6.0, the
+> measured 95th percentile. See "Cross-checked review of the whole system".
+
 ### What changed in the numbers
 
 The retrained model's honest cutoff is **0.0610**, not the 0.0795 taken from the
@@ -139,6 +144,139 @@ to anything stable.
 This does not change the project's conclusion. The edge remains unproven; see
 "Twenty symbols, one frozen configuration". It changes which model is deployed
 and makes the live experiment able to record anything at all.
+
+## Cross-checked review of the whole system, and what it changed
+
+Date: 2026-10-01. Four reviewers read the code independently (data and model,
+backtest and statistics, operations, the live loop); each report was then
+handed to a different agent whose job was to refute it, on a snapshot pinned
+at 0bb9662, with every claim reproduced by a script or a failing test. What
+survived is below with what was done about it. Four defects were found by two
+reviewers independently - a half-saved model hiding the good one, the gap-fill
+cap, missing label parameters in model metadata, and market-order trades held
+one bar short - which is the reason for doing it this way.
+
+### Defects that touched recorded or live numbers
+
+- **Live features were built from 1,800 bars.** The daily features are
+  recursive averages over daily bars, and 75 days of them had not settled: on
+  real BTC, `d1_rsi_14` sat up to 1.5 points from the value training computed,
+  and about 6% of signals (8 of 1,500 decisions) came out differently. Every
+  live prediction before this fix carries that difference. The window is now
+  7,200 bars, which matches full history to 1e-7.
+- **One bar could be logged twice.** The prediction log's unique key included
+  the model version, so a retrain and restart within the hour logged the bar
+  again, alerted again, and counted it twice in every rate. New duplicates are
+  refused; any already in a log are left in place - the log is not rewritten -
+  and every reader counts only the first row per bar.
+- **Market-order paper trades were held 23 hours, not 24.** Entered on the
+  signal bar, they closed at open[t+H] = close[t+H-1]. The maker path, which is
+  the configured one, was right; the taker path now enters on the next bar.
+- **Labels reached across holes in the data.** Six symbols (FIL, LTC, NEAR,
+  SOL, TRX, XRP) miss days in February and April 2022; beside the holes a
+  "24-bar" label measured up to 96 hours. About 48 rows per symbol now get no
+  label. The twenty-symbol results were not rerun for this.
+- **`ask` never refreshed bars** (it imported a module that does not exist and
+  blamed the network), counted backfilled rows in the record it quoted, and
+  left the cached prompt out of its cost.
+
+### Defects in the gates
+
+- `train --save` with no raw klines skipped the backtest and recorded a
+  strategy verdict of GO that was never computed. It is INSUFFICIENT now.
+- A saved model did not record what it was trained to predict (horizon, ATR
+  period, band). `train --horizon 48 --save` would have been traded as a
+  24-bar model. Models now carry their label definition, and the scheduler,
+  dashboard and `doctor` refuse a model whose labels differ from the config.
+- The final model's training rows ran up to the block its cutoff is set on,
+  with no purge. No label is read there and no reported number leaked; the
+  split now leaves a horizon's gap, as the folds always did.
+
+### The gates, and what they had recorded
+
+These change conclusions already written in this document.
+
+- **The classification gate scored the withdrawn 0.50-threshold rule.** On
+  BTC that rule took 65% of fold 0 and 1% of fold 4, so one fold supplied two
+  thirds of the scored rows - the first CORRECTION above, still alive in the
+  gate. It now scores the deployed rule, the top 8% by margin in each fold.
+- **The baselines were scored on every bar and the model only on the bars it
+  chose.** On BTC the model called UP on 99% of its bars, and always-up on
+  those same bars scored exactly what it did (0.4474 both): the +2.2-point lead
+  printed in "BTCUSDT retrained on the archive data" was which rows were
+  counted. Baselines are now scored on the model's bars; the coin-flip baseline,
+  which resolved its tie by argmax and was in fact always-DOWN, now scores its
+  expected half point, and always-down is its own baseline.
+- **The significance interval treated overlapping 24-hour outcomes as
+  independent.** BTC's [+1.3, +3.1] points is [-0.4, +4.8] resampled in blocks,
+  and every one of the seven symbols the old gate passed had a block interval
+  including zero. The gate now uses a paired, studentized circular block
+  bootstrap (block_length(horizon, n), as the touch interval does).
+- **Under the corrected gate**, on the cached out-of-fold runs for all twenty
+  symbols (a reproduction of the margin arm of the cost-aware experiment, not
+  the exact recorded runs): classification GO goes from **7** (DOGE, DOT, ETC,
+  ETH, FIL, LTC, XRP) to **2** (ETH, LTC). Both call UP on about nine bars in
+  ten; ETH's lead over always-up on its own bars is +1.3 points, interval
+  [+0.3, +4.0].
+- **The two-sided test checked only the shorts.** In a falling market the
+  long-bias trap runs the other way: OPUSDT's longs lost 765 at 43% while its
+  shorts made +5,287 over a 96% decline, and it was recorded TWO-SIDED. Applied
+  to both sides, on the same cached runs: TWO-SIDED **11 to 4** (ADA, ETC, ETH,
+  LINK); passing all three gates of the cost-aware experiment **5 to 3** (ADA,
+  ETC, LINK - OP and INJ fall out). The strategy gate that decides saving never
+  split by side at all; DOGE, +29.4% with losing shorts, would have passed. It
+  now requires TWO-SIDED.
+- **The live hit-rate intervals treated overlapping outcomes as independent.**
+  Simulated with a true rate of 50%, the "95%" Wilson interval held the truth
+  34% of the time over every scored bar and about 55% over clustered signals;
+  status printed "the interval clears 50%" on that basis. Intervals are now
+  Wilson on the number of non-overlapping 24-hour windows (96-98% in the same
+  simulation).
+- **The drift and coverage tolerances of 2x were inside the noise.** Signals
+  come in runs. On the same out-of-fold margins, a model working exactly as
+  built strays past 2x in 43% of 500-bar windows (live) and 41% of 1,000-bar
+  verify blocks (save gate), and fires on nothing in 5.3% of 336-bar windows.
+  The "+-1.3x at two sigma" in the SECOND CORRECTION assumed independent bars.
+  Tolerances are now the measured 95th percentiles: 8x live, 6x at the save
+  gate. The live drift line on the user's machine (3.2% of 189 bars, 2.5x) was
+  noise by this measure, as the status report already said it might be.
+- **The paper ledger charged slippage twice** on legs that crossed the spread
+  (in the price and again as a cost), 1-2 bps a trade pessimistic against the
+  backtest engine. The configured maker path is affected wherever an order was
+  chased or an exit missed its limit.
+
+**What this does not change.** No saved model is altered and the served model
+is unchanged; the gates apply to the next save. The project's conclusion - a
+small directional signal that has not been shown to survive costs - stands,
+with less support than before: fewer symbols clear the classification gate
+than were recorded, and fewer are two-sided.
+
+### Failures that would have stopped the system quietly
+
+- A parquet file killed mid-write stayed truncated and every later cycle died
+  on it; a model directory killed mid-save became "latest" and the symbol
+  stopped predicting, scoring and closing while the heartbeat stayed green.
+  Files and models are now written to a temporary name and renamed into place.
+- The watchdog marked an outage reported before Telegram had accepted the
+  message, so one failed send silenced the whole outage.
+- One malformed RSS item cost every headline in its feed; a store failure
+  turned the next poll into a 304 and the unstored headlines never came back.
+- On Windows: `schtasks` stops a task after 72 hours and on battery by
+  default (install-task.bat now lifts both - re-run it once); under pythonw the
+  scheduler's log went nowhere (now `data/logs/scheduler.log`); `run.bat` left
+  the old scheduler running beside the new one.
+- The dashboard kept showing a green "scheduler running" from its last good
+  refresh when the API went away; it now says it cannot update, and how old
+  the numbers are.
+
+### Not fixed, and why
+
+- The news features count a poll as "listening" when any one of five feeds
+  answered. The model does not read news, so nothing live depends on it; it is
+  recorded here so a later measurement does not inherit it.
+- LightGBM's default of every core ran more than ten times slower than two
+  threads in the shared review container. It was not reproduced on an idle
+  machine and is left as it is.
 
 ## A gate that read the wrong verdict, and twelve days that went badly
 
@@ -252,7 +390,7 @@ rows from 2020-01-31 to 2026-08-30 (`data.binance.vision`), not saved.
 
 | verdict | result |
 |---|---|
-| classification | **NO-GO** — Brier 0.6314 against the prior's 0.6279 (beats always-up on direction, CI [+1.3, +3.1]pp) |
+| classification | **NO-GO** — Brier 0.6314 against the prior's 0.6279 (beats always-up on direction, CI [+1.3, +3.1]pp — but see 2026-10-01: on the same bars always-up scores the same, and in blocks the interval is [−0.4, +4.8]) |
 | strategy | **NO-GO** — −4.2% after costs, −23.5% at doubled costs, Sharpe −0.01, 3,844 trades at 51.7% |
 
 Seven days earlier the same configuration passed both gates at +50.1%. **The
@@ -329,6 +467,12 @@ the selection rule is the only difference.
 | 3. no gate passes lost | pass — 8 vs 5 |
 | 4. no fewer TWO-SIDED symbols | **FAIL** — 9 vs 11 |
 | **verdict** | **REJECTED** |
+
+> **2026-10-01: the two-sided column checked the shorts only.** Applied to both
+> sides, the margin arm has 4 TWO-SIDED symbols (ADA, ETC, ETH, LINK), not 11,
+> and 3 gate passes (ADA, ETC, LINK), not 5. The volatility arm was not
+> recomputed, so criteria 3 and 4 are re-opened rather than re-decided;
+> REJECTED stands on criterion 1 alone (12/20, p 0.25).
 
 **What the rule got right.** Past volatility does predict the next day's
 move: the bars it picked moved more on all 20 symbols, 4.47% against 3.41% on
@@ -1149,6 +1293,12 @@ store that the scheduler deliberately does not sync. Both are fixed: age is
 measured from the close, and only the traded interval is judged.
 
 ## Twenty symbols, one frozen configuration
+
+> **2026-10-01: the two-sided gate below checked the shorts only.** On the
+> archive window ATOM, DOT and OP - all on the pass lists here - had losing
+> longs. The 2026-09-11 data is not available to recompute these tables, so
+> the pass counts should be read as upper bounds. See "Cross-checked review of
+> the whole system".
 
 > **Re-run 2026-09-11 with fourteen more days of data. Verdict unchanged, and
 > the re-run is more informative than the verdict.**
