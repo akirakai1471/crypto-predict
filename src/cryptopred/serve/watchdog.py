@@ -9,6 +9,11 @@ So the dashboard process, which is separate from the scheduler and outlives
 it, checks the heartbeat every few minutes and sends one Telegram message when
 it goes stale, and one more when it comes back. One per incident: a message
 every ten minutes for a day is a message nobody reads by the afternoon.
+
+"One per incident" means one that arrived. The state flips only when Telegram
+accepts the message; a send that fails - the network down, Telegram briefly
+unreachable - is tried again at the next look, rather than leaving an outage
+that the watchdog believes it reported and nobody heard about.
 """
 
 from __future__ import annotations
@@ -34,25 +39,29 @@ class SchedulerWatchdog:
         self.down = False
 
     def check(self, now=None) -> str:
-        """One look. Returns "down", "recovered" or "ok" for what it did."""
+        """One look. Returns what it did: "down" or "recovered" when it told
+        the user, "unsent" when it tried and Telegram did not take the message
+        (it tries again next look), "ok" when there was nothing to say."""
         beat = heartbeat.status(self.heartbeat_path, now=now)
         alive = beat["state"] == "alive"
 
         if not alive and not self.down:
-            self.down = True
-            self.send(
+            logger.warning("scheduler down: %s", beat["detail"])
+            if not self.send(
                 "cryptopred — SCHEDULER ĐÃ DỪNG\n"
                 f"{beat['detail']}\n\n"
                 "Không có dự đoán nào đang được ghi. Trên máy chủ: "
                 "`docker compose ps` và `docker compose logs --tail 50 scheduler`."
-            )
-            logger.warning("scheduler down: %s", beat["detail"])
+            ):
+                return "unsent"
+            self.down = True
             return "down"
 
         if alive and self.down:
-            self.down = False
-            self.send(f"cryptopred — scheduler chạy lại. {beat['detail']}.")
             logger.info("scheduler recovered: %s", beat["detail"])
+            if not self.send(f"cryptopred — scheduler chạy lại. {beat['detail']}."):
+                return "unsent"
+            self.down = False
             return "recovered"
 
         return "ok"
