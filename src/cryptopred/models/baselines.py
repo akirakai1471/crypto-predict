@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-BASELINES = ("coin_flip", "always_up", "prior", "momentum")
+BASELINES = ("coin_flip", "always_up", "always_down", "prior", "momentum")
 
 N_CLASSES = 3
 DOWN, FLAT, UP = 0, 1, 2
@@ -37,6 +37,14 @@ def baseline_predictions(
     if name == "always_up":
         proba = np.zeros((n, N_CLASSES))
         proba[:, UP] = 1.0
+        return proba
+
+    if name == "always_down":
+        # The coin_flip baseline was this in practice - an argmax tie between
+        # DOWN and UP resolves to DOWN - without saying so. Now it is explicit,
+        # and the coin flip is scored as the coin flip it is (report.py).
+        proba = np.zeros((n, N_CLASSES))
+        proba[:, DOWN] = 1.0
         return proba
 
     if name == "prior":

@@ -14,6 +14,7 @@ import pandas as pd
 
 from cryptopred.backtest.engine import CostModel, backtest
 from cryptopred.models.selection import signals_by_quantile_per_fold
+from cryptopred.paper.replay import SideStats, two_sided_verdict
 
 DOWN, FLAT, UP = 0, 1, 2
 
@@ -97,6 +98,9 @@ def run_strategy_backtest(
         "doubled_costs": doubled,
         "frictionless": frictionless,
         "signals": signals,
+        "two_sided": two_sided_verdict(
+            _side_stats(base.trades, 1), _side_stats(base.trades, -1)
+        ),
         "survives_doubled_costs": bool(doubled.summary.get("total_return", 0) > 0),
         "cost_drag": float(
             frictionless.summary.get("total_return", 0.0)
@@ -140,6 +144,15 @@ def strategy_verdict(result: dict[str, Any]) -> dict[str, str]:
             "decision": "NO-GO",
             "reason": f"max drawdown {drawdown:.1%} is not survivable in practice",
         }
+    # A profit from one side only is a bet on the trend of the test window, and
+    # the gate used to pass it: DOGEUSDT made +29.4% (+16.9% at doubled costs)
+    # with its shorts losing money, and would have been saved.
+    sides = result.get("two_sided")
+    if sides is not None and sides["decision"] != "TWO-SIDED":
+        return {
+            "decision": "NO-GO",
+            "reason": f"{sides['decision'].lower()}: {sides['reason']}",
+        }
     return {
         "decision": "GO",
         "reason": f"profitable after costs ({total:.1%}) and survives doubled costs",
@@ -172,6 +185,8 @@ def format_backtest(result: dict[str, Any], symbol: str, interval: str) -> str:
         f"  doubled-cost total return:  {_pct(doubled.summary['total_return'])}",
         f"  cost drag:                  {_pct(result['cost_drag'])}",
         f"  survives doubled costs:     {result['survives_doubled_costs']}",
+        f"  sides:                      "
+        f"{result['two_sided']['decision'] if result.get('two_sided') else 'n/a'}",
         "",
         "=" * 68,
         f"STRATEGY VERDICT: {v['decision']}",
@@ -179,6 +194,22 @@ def format_backtest(result: dict[str, Any], symbol: str, interval: str) -> str:
         "=" * 68,
     ]
     return "\n".join(lines)
+
+
+def _side_stats(trades: pd.DataFrame, direction: int) -> SideStats:
+    """Per-side record in return units; two_sided_verdict compares the sides
+    with each other, so the unit only has to be the same for both."""
+    if trades.empty:
+        return SideStats(n=0, win_rate=None, total_pnl=0.0, avg_return=None)
+    side = trades[trades["direction"] == direction]
+    if side.empty:
+        return SideStats(n=0, win_rate=None, total_pnl=0.0, avg_return=None)
+    return SideStats(
+        n=int(len(side)),
+        win_rate=float((side["net_return"] > 0).mean()),
+        total_pnl=float(side["net_return"].sum()),
+        avg_return=float(side["net_return"].mean()),
+    )
 
 
 def _pct(value: float, digits: int = 2) -> str:

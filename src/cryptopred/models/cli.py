@@ -110,7 +110,13 @@ def train(
         dataset, n_splits=n_splits, horizon=horizon, config=train_config, n_jobs=jobs
     )
 
-    report = format_evaluation(evaluation, symbol=symbol, interval=interval, threshold=threshold)
+    report = format_evaluation(
+        evaluation,
+        symbol=symbol,
+        interval=interval,
+        coverage=cfg.strategy.signal_coverage,
+        horizon=horizon,
+    )
 
     # The classification report says whether the model knows anything. The
     # backtest says whether that knowledge survives contact with fees.
@@ -137,7 +143,7 @@ def train(
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
     (reports_dir / f"{symbol}_{interval}_{stamp}.txt").write_text(report, encoding="utf-8")
 
-    decision = verdict(evaluation, threshold=threshold)
+    decision = verdict(evaluation, coverage=cfg.strategy.signal_coverage, horizon=horizon)
     summary = {
         "symbol": symbol,
         "interval": interval,

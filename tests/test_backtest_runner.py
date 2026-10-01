@@ -88,3 +88,30 @@ def test_format_backtest_mentions_robustness():
     text = format_backtest(result, "BTCUSDT", "1h")
     assert "ROBUSTNESS" in text
     assert "survives doubled costs" in text
+
+
+def test_a_one_sided_profit_does_not_pass_the_strategy_gate():
+    """DOGEUSDT made +29.4% (+16.9% at doubled costs) with its shorts losing
+    money, and the save gate - which never split by side - would have passed it."""
+    from types import SimpleNamespace
+
+    from cryptopred.backtest.runner import _side_stats, strategy_verdict
+    from cryptopred.paper.replay import two_sided_verdict
+
+    rng = np.random.default_rng(0)
+    trades = pd.DataFrame(
+        {
+            "direction": np.r_[np.ones(400), -np.ones(400)],
+            "net_return": np.r_[rng.normal(0.004, 0.02, 400), rng.normal(-0.001, 0.02, 400)],
+        }
+    )
+    summary = {"n_trades": 800, "total_return": 0.294, "max_drawdown": -0.27}
+    result = {
+        "base": SimpleNamespace(summary=summary, trades=trades),
+        "doubled_costs": SimpleNamespace(summary={**summary, "total_return": 0.169}),
+        "survives_doubled_costs": True,
+        "two_sided": two_sided_verdict(_side_stats(trades, 1), _side_stats(trades, -1)),
+    }
+    v = strategy_verdict(result)
+    assert v["decision"] == "NO-GO"
+    assert "one-sided" in v["reason"]
