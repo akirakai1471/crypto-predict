@@ -27,8 +27,9 @@ from cryptopred.config import Config
 from cryptopred.ingest.storage import ParquetStore
 from cryptopred.models.registry import ModelRegistry
 from cryptopred.serve.drift import coverage_drift
-from cryptopred.serve.status import wilson_interval
+from cryptopred.serve.status import overlap_interval
 from cryptopred.serve.store import PredictionStore
+from cryptopred.timeframes import interval_to_timedelta
 
 ALLOWED_SYMBOLS = ("BTCUSDT", "ETHUSDT")
 
@@ -279,12 +280,24 @@ class BriefingTools:
         # An accuracy computed from zero scored bars is 0.0, which reads as a
         # measured failure rather than as no measurement. `Measured` rejects
         # n <= 0 for exactly this reason.
+        horizon = self.cfg.labels.horizon_bars.get(self.interval, 24) * interval_to_timedelta(
+            self.interval
+        )
+        interval_95, n_eff = overlap_interval(
+            scored["is_correct"], scored["bar_close_time"], horizon
+        )
         accuracy: Measured | Unavailable = (
             Measured(
                 value=correct / n,
                 n=n,
-                interval=wilson_interval(correct, n),
-                method="mọi nến đã chấm điểm, Wilson (các lần thử độc lập)",
+                interval=interval_95,
+                # Every scored bar shares 23 of its 24 hours with the next; as
+                # independent trials the interval held the truth a third of the
+                # time. Counted as non-overlapping windows instead.
+                method=(
+                    f"mọi nến đã chấm điểm; Wilson trên {n_eff} cửa sổ 24h không chồng "
+                    "nhau, vì kết quả các nến liền nhau không độc lập"
+                ),
             )
             if n > 0
             else Unavailable(
