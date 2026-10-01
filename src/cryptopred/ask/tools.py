@@ -266,6 +266,12 @@ class BriefingTools:
             return Unavailable(reason="chưa có dự báo nào được ghi").to_dict()
 
         scored = history[history["actual_return"].notna()]
+        # Backfilled rows were predicted after their bar had closed, by a model
+        # that may postdate it; they prove nothing about foresight. The status
+        # report and the dashboard already drop them - counted here, ask
+        # reported a different record from the one beside it on the screen.
+        if "was_backfilled" in scored.columns:
+            scored = scored[scored["was_backfilled"].fillna(0).astype(int) == 0]
         correct = int(scored["is_correct"].sum()) if not scored.empty else 0
         n = int(len(scored))
         cost = self.cfg.strategy.taker_fee * 2 + self.cfg.strategy.slippage * 2
