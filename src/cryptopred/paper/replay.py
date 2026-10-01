@@ -120,51 +120,72 @@ def two_sided_verdict(long: SideStats, short: SideStats) -> dict[str, str]:
     50%, and the shorts quietly bleed underneath. Splitting by side is the only
     way to see it, and a strategy that only works in one direction is a bet on
     that direction, not a model.
+
+    Both sides face the same four tests. Until 2026-10-01 only the shorts did,
+    because the trap this was written for was a rising market - and in a falling
+    one the same trap runs the other way: OPUSDT's shorts made +5,287 while its
+    longs lost 765 at a 43% win rate over a 96% decline, and it was recorded as
+    TWO-SIDED. Six of the eleven symbols recorded that way had losing longs.
     """
     if long.n == 0 and short.n == 0:
         return {"decision": "NO TRADES", "reason": "nothing was traded"}
-    if short.n < 100:
+    for name, side, other_name, other in (
+        ("short", short, "long", long),
+        ("long", long, "short", short),
+    ):
+        problem = _one_side_problem(name, side, other_name, other)
+        if problem is not None:
+            return problem
+    return {
+        "decision": "TWO-SIDED",
+        "reason": (
+            f"longs win {long.win_rate:.1%} and earn {long.total_pnl:+,.0f} USDT, "
+            f"shorts win {short.win_rate:.1%} and earn {short.total_pnl:+,.0f} USDT: "
+            "the edge survives in both directions"
+        ),
+    }
+
+
+def _one_side_problem(
+    name: str, side: SideStats, other_name: str, other: SideStats
+) -> dict[str, str] | None:
+    """Why this side does not stand on its own, or None if it does."""
+    if side.n < 100:
         return {
             "decision": "UNPROVEN",
-            "reason": f"only {short.n} short trades — too few to judge the short side",
+            "reason": f"only {side.n} {name} trades — too few to judge the {name} side",
         }
-    if short.total_pnl < 0:
+    if side.total_pnl < 0:
         return {
             "decision": "ONE-SIDED",
             "reason": (
-                f"shorts lost {abs(short.total_pnl):,.0f} USDT at a {short.win_rate:.1%} "
-                "win rate; the profit comes from the long side alone, which in a rising "
-                "market is a directional bet rather than a prediction"
+                f"{name}s lost {abs(side.total_pnl):,.0f} USDT at a {side.win_rate:.1%} "
+                f"win rate; the profit comes from the {other_name} side alone, which in "
+                "a trending market is a directional bet rather than a prediction"
             ),
         }
     # Check the win rate before the contribution: "below a coin flip" is the more
     # specific diagnosis, and reporting the vaguer one would hide it.
-    if short.win_rate is not None and short.win_rate < 0.5:
+    if side.win_rate is not None and side.win_rate < 0.5:
         return {
             "decision": "ONE-SIDED",
             "reason": (
-                f"shorts win only {short.win_rate:.1%} of the time — below a coin flip — "
-                f"and contribute {short.total_pnl:,.0f} USDT, which is noise, not edge"
+                f"{name}s win only {side.win_rate:.1%} of the time — below a coin flip — "
+                f"and contribute {side.total_pnl:,.0f} USDT, which is noise, not edge"
             ),
         }
-    if long.total_pnl > 0 and short.total_pnl < 0.05 * long.total_pnl:
+    if other.total_pnl > 0 and side.total_pnl < 0.05 * other.total_pnl:
         # Winning often while earning nothing means small wins and large losses:
-        # the short side is carried by the long side, not standing on its own.
+        # this side is carried by the other, not standing on its own.
         return {
             "decision": "ONE-SIDED",
             "reason": (
-                f"shorts win {short.win_rate:.1%} but contribute only "
-                f"{short.total_pnl:,.0f} USDT against the long side's "
-                f"{long.total_pnl:,.0f}: small wins and large losses, not an edge"
+                f"{name}s win {side.win_rate:.1%} but contribute only "
+                f"{side.total_pnl:,.0f} USDT against the {other_name} side's "
+                f"{other.total_pnl:,.0f}: small wins and large losses, not an edge"
             ),
         }
-    return {
-        "decision": "TWO-SIDED",
-        "reason": (
-            f"shorts win {short.win_rate:.1%} and earn {short.total_pnl:+,.0f} USDT "
-            "alongside the longs: the edge survives in both directions"
-        ),
-    }
+    return None
 
 
 def _side_stats(trades: pd.DataFrame, direction: int) -> SideStats:

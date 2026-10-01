@@ -199,3 +199,32 @@ def test_one_sided_when_shorts_win_often_but_earn_nothing():
 def test_two_sided_needs_a_material_short_contribution():
     v = two_sided_verdict(_side(3000, 0.55, 5000.0), _side(1100, 0.551, 800.0))
     assert v["decision"] == "TWO-SIDED"
+
+
+# -- the same tests for the long side (review, 2026-10-01) ------------------------
+
+
+def test_one_sided_when_longs_lose_in_a_falling_market():
+    """OPUSDT: shorts +5,287, longs -765 at 43.3% over a 96% decline - recorded
+    TWO-SIDED because only the shorts were ever tested."""
+    v = two_sided_verdict(_side(410, 0.433, -765.0), _side(900, 0.56, 5287.0))
+    assert v["decision"] == "ONE-SIDED"
+    assert "short side alone" in v["reason"]
+
+
+def test_one_sided_when_long_win_rate_is_below_chance():
+    """INJUSDT's longs made money but won 49.3% of the time."""
+    v = two_sided_verdict(_side(700, 0.493, 300.0), _side(800, 0.55, 2000.0))
+    assert v["decision"] == "ONE-SIDED"
+    assert "longs win only" in v["reason"]
+
+
+def test_unproven_when_too_few_longs():
+    v = two_sided_verdict(_side(40, 0.60, 90.0), _side(3000, 0.55, 4000.0))
+    assert v["decision"] == "UNPROVEN"
+    assert "long" in v["reason"]
+
+
+def test_the_verdict_is_symmetric():
+    long, short = _side(3000, 0.55, 5000.0), _side(1500, 0.571, 20.0)
+    assert two_sided_verdict(long, short)["decision"] == two_sided_verdict(short, long)["decision"]
