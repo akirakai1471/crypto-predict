@@ -75,6 +75,7 @@ class ModelRegistry:
         n_train_rows: int | None = None,
         margin_cutoff: float | None = None,
         signal_coverage: float | None = None,
+        labels: dict[str, Any] | None = None,
     ) -> str:
         # Millisecond precision so two saves in the same second stay distinct.
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")[:-3]
@@ -97,6 +98,7 @@ class ModelRegistry:
                 n_train_rows,
                 margin_cutoff,
                 signal_coverage,
+                labels,
             )
             directory.rename(self.root / version)
         except BaseException:
@@ -118,6 +120,7 @@ class ModelRegistry:
         n_train_rows: int | None,
         margin_cutoff: float | None,
         signal_coverage: float | None,
+        labels: dict[str, Any] | None = None,
     ) -> None:
 
         result.booster.save_model(str(directory / "model.txt"))
@@ -139,6 +142,11 @@ class ModelRegistry:
             # was available.
             "margin_cutoff": margin_cutoff,
             "signal_coverage": signal_coverage,
+            # What the model was trained to predict. The live loop scores,
+            # holds and sizes by the config's horizon; a model trained with
+            # `--horizon 48` and saved would otherwise be traded as a 24-bar
+            # model with nothing to say so.
+            "labels": labels,
             "metrics": metrics,
             "config": asdict(config),
             "calibrated": result.calibrators is not None,

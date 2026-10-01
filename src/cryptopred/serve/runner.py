@@ -18,7 +18,7 @@ from cryptopred.paper.trader import PaperTrader
 from cryptopred.serve import heartbeat
 from cryptopred.serve.alerts import format_alert, notify, should_alert
 from cryptopred.serve.gapfill import fill_gaps
-from cryptopred.serve.predictor import Predictor
+from cryptopred.serve.predictor import LabelMismatchError, Predictor
 from cryptopred.serve.scoring import score_pending
 from cryptopred.serve.store import PredictionStore
 from cryptopred.timeframes import interval_to_timedelta
@@ -62,6 +62,9 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
     for symbol in cfg.data.symbols:
         try:
             predictor = Predictor.from_registry(cfg, symbol, interval)
+        except LabelMismatchError:
+            logger.exception("%s %s: not predicting", symbol, interval)
+            predictor = None
         except FileNotFoundError as exc:
             # No new predictions without a model - but the open positions and
             # unscored rows it already made still close and score below. This

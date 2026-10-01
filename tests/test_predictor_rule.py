@@ -71,3 +71,26 @@ def test_confidence_is_still_reported_even_when_silent():
     p = _predict([0.30, 0.20, 0.50], cutoff=0.30)
     assert p.confidence == pytest.approx(0.50)
     assert p.proba == pytest.approx((0.30, 0.20, 0.50))
+
+
+def test_live_features_match_the_features_the_model_was_trained_on():
+    """Training builds features on full history; the live predictor builds them
+    on its window. With 1,800 bars the daily RSI was up to 1.5 points off on
+    real BTC and about 6% of signals changed. The window must be long enough
+    that the two agree."""
+    from cryptopred.config import Config
+    from cryptopred.features.pipeline import build_features
+    from cryptopred.serve.predictor import LIVE_WINDOW_BARS
+    from tests.conftest import make_ohlcv
+
+    cfg = Config()
+    bars = make_ohlcv(n=LIVE_WINDOW_BARS + 1500, seed=17)
+    full = build_features(bars, interval="1h", funding=None, config=cfg.features)
+    for end in (len(bars) - 700, len(bars)):
+        upto = bars.iloc[:end]
+        live = build_features(
+            upto.tail(LIVE_WINDOW_BARS), interval="1h", funding=None, config=cfg.features
+        )
+        last = live.index[-1]
+        diff = (live.loc[last] - full.loc[last]).abs().max()
+        assert diff < 1e-6, (end, diff)

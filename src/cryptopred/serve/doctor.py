@@ -13,6 +13,7 @@ somewhere else.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from cryptopred.models.registry import ModelRegistry
 from cryptopred.news.fetch import USER_AGENT
 from cryptopred.serve import telegram
 from cryptopred.serve.freshness import funding_freshness
+from cryptopred.serve.predictor import check_labels
 
 
 @dataclass
@@ -80,7 +82,16 @@ def _models(cfg: Config) -> list[Check]:
     for symbol in cfg.data.symbols:
         version = registry.latest(symbol, "1h")
         if version:
-            out.append(Check(f"model {symbol}", "ok", version))
+            # Read the metadata the scheduler will check, rather than calling a
+            # model ok because its directory exists.
+            try:
+                metadata = json.loads(
+                    (registry.root / version / "metadata.json").read_text(encoding="utf-8")
+                )
+                check_labels(metadata, cfg, "1h")
+                out.append(Check(f"model {symbol}", "ok", version))
+            except (OSError, ValueError) as exc:
+                out.append(Check(f"model {symbol}", "fail", f"{version}: {exc}"))
         else:
             out.append(
                 Check(

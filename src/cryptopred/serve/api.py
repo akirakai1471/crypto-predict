@@ -23,7 +23,7 @@ from cryptopred.paper.trader import PaperTrader
 from cryptopred.serve import heartbeat, watchdog
 from cryptopred.serve.alerts import read_log
 from cryptopred.serve.drift import coverage_drift
-from cryptopred.serve.predictor import Predictor
+from cryptopred.serve.predictor import LabelMismatchError, Predictor
 from cryptopred.serve.store import PredictionStore
 
 WEB_DIR = Path(__file__).resolve().parents[3] / "web"
@@ -66,6 +66,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             predictors[key] = Predictor.from_registry(cfg, symbol, interval)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except LabelMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return predictors[key]
 
     @app.get("/api/health")

@@ -284,3 +284,38 @@ def test_a_failed_save_leaves_nothing_behind(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         registry.save(_fold_result()[1], "BTCUSDT", "1h", {}, TrainConfig())
     assert list(tmp_path.iterdir()) == []
+
+
+# -- review findings, 2026-10-01: what a model was trained to predict -------------
+
+
+def test_the_label_definition_travels_with_the_model(tmp_path):
+    registry = ModelRegistry(tmp_path)
+    labels = {"horizon": 48, "atr_period": 14, "band_k": 0.5}
+    version = registry.save(_fold_result()[1], "BTCUSDT", "1h", {}, TrainConfig(), labels=labels)
+    assert registry.load(version).metadata["labels"] == labels
+
+
+def test_a_model_trained_on_other_labels_is_refused_live(tmp_path):
+    """`train --horizon 48 --save` was loaded by the scheduler and scored,
+    held and sized as a 24-bar model, with nothing to say so."""
+    from cryptopred.config import Config
+    from cryptopred.serve.predictor import LabelMismatchError, Predictor, check_labels
+
+    cfg = Config()
+    cfg.data.root = tmp_path
+    expected = {
+        "horizon": cfg.labels.horizon_bars.get("1h", 24),
+        "atr_period": cfg.labels.atr_period,
+        "band_k": cfg.labels.band_k,
+    }
+    check_labels({"labels": expected}, cfg, "1h")
+    check_labels({}, cfg, "1h")  # saved before labels were recorded: trusted
+
+    registry = ModelRegistry(tmp_path / "models")
+    registry.save(
+        _fold_result()[1], "BTCUSDT", "1h", {}, TrainConfig(),
+        labels={**expected, "horizon": expected["horizon"] * 2},
+    )
+    with pytest.raises(LabelMismatchError, match="horizon"):
+        Predictor.from_registry(cfg, "BTCUSDT", "1h")
