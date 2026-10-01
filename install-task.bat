@@ -91,7 +91,9 @@ timeout /t 10 /nobreak >nul
 
 echo.
 echo Verifying...
-status.bat
+REM "call", or control passes to status.bat and never comes back: everything
+REM below - what to check if the scheduler is not RUNNING - was never shown.
+call status.bat
 echo.
 echo If the scheduler line above does not say RUNNING, check:
 echo     schtasks /Query /TN "%TASK_SCHED%" /V /FO LIST

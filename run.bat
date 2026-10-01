@@ -33,8 +33,10 @@ if errorlevel 1 (
 )
 
 echo Stopping anything already running...
-taskkill /F /FI "WINDOWTITLE eq cryptopred scheduler*" >nul 2>&1
-taskkill /F /FI "WINDOWTITLE eq cryptopred dashboard*" >nul 2>&1
+REM /T takes the python.exe under each window with it. Without it only cmd.exe
+REM died, the old scheduler kept running, and a second one started beside it.
+taskkill /F /T /FI "WINDOWTITLE eq cryptopred scheduler*" >nul 2>&1
+taskkill /F /T /FI "WINDOWTITLE eq cryptopred dashboard*" >nul 2>&1
 timeout /t 2 /nobreak >nul
 
 echo Starting scheduler and dashboard...
@@ -46,20 +48,22 @@ timeout /t 12 /nobreak >nul
 
 REM Verify rather than assume. A window that opened and died leaves no trace
 REM otherwise, and the failure would only surface days later as an empty log.
-set RUNNING=0
+REM Each piece is counted on its own: one count for both said OK while the
+REM scheduler - the piece that matters - had died at start-up.
+set SCHED=0
+set DASH=0
 for /f %%N in ('powershell -NoProfile -Command ^
-  "(Get-CimInstance Win32_Process -Filter \"Name like 'python%%'\" ^| Where-Object { $_.CommandLine -like '*cryptopred.serve.cli schedule*' -or $_.CommandLine -like '*uvicorn cryptopred*' }).Count"') do set RUNNING=%%N
+  "(Get-CimInstance Win32_Process -Filter \"Name like 'python%%'\" ^| Where-Object { $_.CommandLine -like '*cryptopred.serve.cli schedule*' }).Count"') do set SCHED=%%N
+for /f %%N in ('powershell -NoProfile -Command ^
+  "(Get-CimInstance Win32_Process -Filter \"Name like 'python%%'\" ^| Where-Object { $_.CommandLine -like '*uvicorn cryptopred*' }).Count"') do set DASH=%%N
 
 echo.
-if "%RUNNING%"=="0" (
-    echo ERROR: neither process is running. Look at the two windows that opened
-    echo for the error message - they stay open on purpose.
-    echo.
-    pause
-    exit /b 1
-)
+if "%SCHED%"=="0" echo ERROR: the scheduler is not running.
+if "%DASH%"=="0" echo ERROR: the dashboard is not running.
+if "%SCHED%"=="0" goto notrunning
+if "%DASH%"=="0" goto notrunning
 
-echo OK - %RUNNING% process^(es^) running.
+echo OK - scheduler and dashboard are both running.
 echo.
 echo Dashboard: http://127.0.0.1:8077
 echo Results:   status.bat
@@ -70,3 +74,11 @@ echo are refilled and flagged, so the gap stays visible instead of vanishing.
 echo.
 start http://127.0.0.1:8077
 pause
+exit /b 0
+
+:notrunning
+echo Look at the window that opened for the error message - it stays open on
+echo purpose.
+echo.
+pause
+exit /b 1
