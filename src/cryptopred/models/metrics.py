@@ -129,36 +129,53 @@ def evaluate(
     return report
 
 
-def bootstrap_difference(
-    y_true: np.ndarray,
-    proba_a: np.ndarray,
-    proba_b: np.ndarray,
-    threshold: float = 0.5,
-    n_boot: int = 2000,
-    seed: int = 0,
+def block_bootstrap_mean(
+    values: np.ndarray, block: int, n_boot: int = 1000, seed: int = 0
 ) -> dict[str, float]:
-    """Bootstrap confidence interval for (A's directional accuracy - B's).
+    """A studentized circular block-bootstrap 95% interval for a mean.
 
-    The spec's success criterion is that this interval excludes zero. Comparing
-    two point estimates is not enough: with a few thousand signals, a 2 point
-    accuracy gap is often noise.
+    Used on paired per-row differences (model right minus baseline right) in
+    time order. Rows whose 24-bar labels overlap are not independent, and an
+    interval that resamples them one at a time reports the width of that many
+    independent trials: on BTC it read [+1.3, +3.1] points where blocks read
+    [-0.4, +4.8], and every symbol it had granted a classification GO had a
+    block interval that included zero. Same construction as the touch interval
+    (briefing/touch.py), without its clipping to [0, 1].
     """
-    rng = np.random.default_rng(seed)
-    n = len(y_true)
-    diffs = np.empty(n_boot)
-
-    for i in range(n_boot):
-        sample = rng.integers(0, n, n)
-        acc_a = directional_accuracy(y_true[sample], proba_a[sample], threshold)["accuracy"]
-        acc_b = directional_accuracy(y_true[sample], proba_b[sample], threshold)["accuracy"]
-        diffs[i] = (acc_a if np.isfinite(acc_a) else 0.0) - (
-            acc_b if np.isfinite(acc_b) else 0.0
-        )
-
-    lower, upper = np.percentile(diffs, [2.5, 97.5])
-    return {
-        "mean_difference": float(diffs.mean()),
-        "ci_lower": float(lower),
-        "ci_upper": float(upper),
-        "excludes_zero": bool(lower > 0 or upper < 0),
+    x = np.asarray(values, dtype=float)
+    n = len(x)
+    mean = float(x.mean()) if n else float("nan")
+    block = max(1, min(int(block), max(n, 1)))
+    n_blocks = int(np.ceil(n / block)) if n else 0
+    result = {
+        "mean_difference": mean,
+        "ci_lower": float("-inf"),
+        "ci_upper": float("inf"),
+        "block": block,
+        "n_blocks": n_blocks,
     }
+    if n_blocks < 2:
+        # One block holds no information about its own spread.
+        result["excludes_zero"] = False
+        return result
+
+    wrapped = np.concatenate([x, x[: block - 1]])
+    csum = np.concatenate([[0.0], np.cumsum(wrapped)])
+    block_means = (csum[block:] - csum[:-block]) / block
+    se = float(block_means.std(ddof=1) / np.sqrt(n_blocks))
+    if se == 0.0:
+        lower = upper = mean
+    else:
+        rng = np.random.default_rng(seed)
+        draws = block_means[rng.integers(0, n, size=(n_boot, n_blocks))]
+        mean_star = draws.mean(axis=1)
+        se_star = draws.std(axis=1, ddof=1) / np.sqrt(n_blocks)
+        t_star = (mean_star - mean) / np.maximum(se_star, se / np.sqrt(n_blocks))
+        q_lo, q_hi = np.quantile(t_star, [0.025, 0.975])
+        lower, upper = mean - q_hi * se, mean - q_lo * se
+    result.update(
+        ci_lower=float(lower),
+        ci_upper=float(upper),
+        excludes_zero=bool(lower > 0 or upper < 0),
+    )
+    return result

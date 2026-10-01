@@ -22,13 +22,13 @@ def cfg(tmp_path):
     return c
 
 
-def _log(cfg, n_signals, n_correct, n_flat=0, scored=True):
+def _log(cfg, n_signals, n_correct, n_flat=0, scored=True, spacing_hours=1):
     store = PredictionStore(cfg.data.root / "predictions.db")
     base = pd.Timestamp("2024-01-01", tz="UTC")
     for i in range(n_signals + n_flat):
         store.record_prediction(
             symbol="BTCUSDT", interval="1h",
-            bar_close_time=base + pd.Timedelta(hours=i),
+            bar_close_time=base + pd.Timedelta(hours=i * spacing_hours),
             proba=(0.2, 0.2, 0.6),
             signal=1 if i < n_signals else 0,
             close_price=100.0, model_version="v1",
@@ -90,8 +90,9 @@ def test_small_samples_are_labelled_not_yet_meaningful(cfg):
 
 
 def test_a_large_winning_sample_is_allowed_to_claim(cfg):
+    """Signals a day or more apart: each one is its own observation."""
     n = MIN_SIGNALS_FOR_A_CLAIM + 50
-    _log(cfg, n_signals=n, n_correct=int(n * 0.62))
+    _log(cfg, n_signals=n, n_correct=int(n * 0.62), spacing_hours=25)
     text = format_status(collect(cfg))
     assert "NOT YET MEANINGFUL" not in text
     assert "clears 50%" in text
@@ -99,9 +100,20 @@ def test_a_large_winning_sample_is_allowed_to_claim(cfg):
 
 def test_a_large_losing_sample_says_the_edge_is_negative(cfg):
     n = MIN_SIGNALS_FOR_A_CLAIM + 50
-    _log(cfg, n_signals=n, n_correct=int(n * 0.35))
+    _log(cfg, n_signals=n, n_correct=int(n * 0.35), spacing_hours=25)
     text = format_status(collect(cfg))
     assert "BELOW 50%" in text
+
+
+def test_a_run_of_hourly_signals_is_not_a_large_sample(cfg):
+    """150 signals in 150 consecutive hours are about six days of outcomes.
+    Wilson over 150 trials said the interval cleared 50%; it does not."""
+    n = MIN_SIGNALS_FOR_A_CLAIM + 50
+    _log(cfg, n_signals=n, n_correct=int(n * 0.62))
+    text = format_status(collect(cfg))
+    assert "clears 50%" not in text
+    assert "straddles 50%" in text
+    assert "7 independent 24h windows" in text
 
 
 def test_a_large_ambiguous_sample_says_so(cfg):
@@ -204,3 +216,28 @@ def test_drift_never_hands_over_a_retrain_command(cfg):
     assert "--save" not in text
     assert "Do NOT retrain on this line alone" in text
     assert "BOTH verdict lines" in text
+
+
+# -- review findings, 2026-10-01: overlapping outcomes are not separate trials ----
+
+
+def test_signals_inside_one_day_count_as_one_observation():
+    from cryptopred.serve.status import effective_sample
+
+    hours = pd.date_range("2026-09-01", periods=48, freq="1h", tz="UTC")
+    assert effective_sample(hours, pd.Timedelta(hours=24)) == 2
+    assert effective_sample(hours[::30], pd.Timedelta(hours=24)) == 2
+    assert effective_sample([], pd.Timedelta(hours=24)) == 0
+
+
+def test_the_interval_is_as_wide_as_the_independent_evidence():
+    """60% over 480 hourly rows is 20 days of outcomes, not 480 trials. Wilson
+    over 480 called that significant; over 20 windows it is not."""
+    from cryptopred.serve.status import overlap_interval
+
+    hours = pd.date_range("2026-09-01", periods=480, freq="1h", tz="UTC")
+    correct = [i % 5 < 3 for i in range(480)]  # 60%
+    (low, high), n_eff = overlap_interval(correct, hours, pd.Timedelta(hours=24))
+    assert n_eff == 20
+    assert wilson_interval(288, 480)[0] > 0.5
+    assert low < 0.5 < high

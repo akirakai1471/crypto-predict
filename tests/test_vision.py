@@ -201,3 +201,28 @@ def test_funding_ingest_resumes_after_the_last_stored_rate(tmp_path):
     with httpx.Client(transport=_archive_transport(files)) as client:
         assert ingest_funding(client, store, "BTCUSDT") == 180
         assert ingest_funding(client, store, "BTCUSDT") == 0
+
+
+def test_a_month_not_yet_archived_is_filled_from_its_daily_files(tmp_path):
+    """Run mid-September, then on 2 October before Binance has published the
+    September archive: only October's dailies were taken, the rest of
+    September became a hole, and resuming from the newest bar never went back."""
+    daily = "data/futures/um/daily/klines/BTCUSDT/1h/BTCUSDT-1h-"
+    files = {
+        "data/futures/um/monthly/klines/BTCUSDT/1h/BTCUSDT-1h-2026-08.zip": _zip(
+            "a.csv", _rows("2026-08-01", 24 * 31)
+        ),
+    }
+    for day in pd.date_range("2026-09-01", "2026-10-01", freq="D"):
+        files[daily + day.strftime("%Y-%m-%d") + ".zip"] = _zip(
+            "d.csv", _rows(day.strftime("%Y-%m-%d"), 24)
+        )
+    store = ParquetStore(tmp_path)
+    with httpx.Client(transport=_archive_transport(files)) as client:
+        ingest_klines(
+            client, store, "BTCUSDT", "1h",
+            now=pd.Timestamp("2026-10-02", tz="UTC"), include_current_month=True,
+        )
+    stored = store.read("klines", "BTCUSDT", "1h")
+    expected = pd.date_range("2026-08-01", "2026-10-01 23:00", freq="1h", tz="UTC")
+    assert len(stored) == len(expected) and (stored.index == expected).all()

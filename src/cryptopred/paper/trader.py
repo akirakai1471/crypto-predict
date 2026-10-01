@@ -52,7 +52,11 @@ class PaperTrader:
         entry_price: float,
         model_version: str,
         horizon: int,
+        signal_time: pd.Timestamp | None = None,
     ) -> bool:
+        """Open at market. `signal_time` is the bar that produced the signal and
+        keys the trade; `entry_time` is the bar the fill happens in, the next
+        one. Without a signal_time the two are taken to be the same bar."""
         if signal == 0:
             return False
         return self.store.open_trade(
@@ -63,6 +67,7 @@ class PaperTrader:
             entry_price=entry_price,
             size_usd=self.position_size(symbol, interval, horizon),
             model_version=model_version,
+            signal_time=signal_time,
         )
 
     # --- maker execution -------------------------------------------------
@@ -181,8 +186,10 @@ class PaperTrader:
         if hit:
             return limit_price, model.maker_fee, True
 
+        # The slippage is in the price already; the cost is the fee alone, as
+        # in the backtest engine's taker_fill. Charging both paid it twice.
         market_price = float(bar["close"]) * (1 - direction * model.slippage)
-        return market_price, model.taker_fee + model.slippage, False
+        return market_price, model.taker_fee, False
 
     def close_due_trades(
         self, symbol: str, interval: str, horizon: int, now: pd.Timestamp | None = None
@@ -220,12 +227,14 @@ class PaperTrader:
                 )
                 # Whether the entry actually rested or crossed decides what it
                 # cost. Assuming the maker fee for a chased entry would make the
-                # paper ledger cheaper than the trade really was.
+                # paper ledger cheaper than the trade really was. A chased
+                # entry's price already carries the slippage (resolve_pending),
+                # so the fee is all that is left to charge.
                 entry_was_maker = bool(trade.get("entry_was_maker") or 0)
                 entry_cost = (
                     self.execution.maker_fee
                     if entry_was_maker
-                    else self.execution.taker_fee + self.execution.slippage
+                    else self.execution.taker_fee
                 )
 
             gross = direction * (exit_price / entry_price - 1.0)

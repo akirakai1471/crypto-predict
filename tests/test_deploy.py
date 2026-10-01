@@ -143,8 +143,38 @@ def test_one_message_when_the_scheduler_dies_and_one_when_it_returns(tmp_path):
 
 def test_a_scheduler_that_never_ran_is_an_outage_too(tmp_path):
     sent = []
-    dog = watchdog.SchedulerWatchdog(tmp_path / "missing.json", send=sent.append)
+    dog = watchdog.SchedulerWatchdog(
+        tmp_path / "missing.json", send=lambda text: sent.append(text) or True
+    )
     assert dog.check() == "down"
+
+
+def test_an_alert_telegram_did_not_take_is_sent_again(tmp_path):
+    """It flipped to "down" before sending and ignored the result, so one
+    failed send - the network blipping at the wrong minute - silenced the
+    whole outage."""
+    path = tmp_path / "heartbeat.json"
+    outcomes = [False, True, False, True]
+    sent = []
+
+    def flaky(text):
+        sent.append(text)
+        return outcomes.pop(0)
+
+    dog = watchdog.SchedulerWatchdog(path, send=flaky)
+    now = pd.Timestamp("2026-09-30T12:00Z")
+
+    _beat(path, 300)
+    assert dog.check(now=now) == "unsent"
+    assert dog.check(now=now) == "down"
+    assert dog.check(now=now) == "ok"
+    _beat(path, 5)
+    assert dog.check(now=now) == "unsent"
+    assert dog.check(now=now) == "recovered"
+    assert dog.check(now=now) == "ok"
+    assert [("ĐÃ DỪNG" in s, "chạy lại" in s) for s in sent] == [
+        (True, False), (True, False), (False, True), (False, True)
+    ]
 
 
 def test_the_watchdog_does_not_start_without_telegram(tmp_path):

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import typer
@@ -14,6 +16,45 @@ from cryptopred.serve.runner import run_cycle
 
 app = typer.Typer(help="Run the prediction service and its scheduled job.")
 logger = logging.getLogger(__name__)
+
+# A few weeks of hourly cycles each; bounded so a year of them cannot fill a disk.
+LOG_FILE_BYTES = 5_000_000
+LOG_FILE_COUNT = 3
+
+
+def scheduler_log_path(cfg: Config) -> Path:
+    return Path(cfg.data.root) / "logs" / "scheduler.log"
+
+
+def setup_scheduler_logging(cfg: Config) -> Path | None:
+    """Log to the console when there is one, and always to a file.
+
+    install-task.bat starts the scheduler under pythonw, which has no console:
+    sys.stderr is None there, and every log line - the traceback of a failed
+    cycle included - went nowhere. The file under data/logs is where to look
+    when status.bat says the last cycle is old. Returns its path, or None if it
+    could not be opened.
+    """
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    handlers: list[logging.Handler] = []
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler())
+    path: Path | None = scheduler_log_path(cfg)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(
+            RotatingFileHandler(
+                path, maxBytes=LOG_FILE_BYTES, backupCount=LOG_FILE_COUNT, encoding="utf-8"
+            )
+        )
+    except OSError:
+        path = None
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for handler in handlers:
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+    return path
 
 
 @app.command()
@@ -173,8 +214,10 @@ def schedule(
     config: Path = typer.Option(None, help="Path to a YAML config file."),
 ) -> None:
     """Run a cycle after every bar close, and poll news, forever."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     cfg = load_config(config)
+    log_path = setup_scheduler_logging(cfg)
+    if log_path is not None:
+        logger.info("logging to %s", log_path)
 
     scheduler = build_scheduler(cfg, interval, minute)
     typer.echo(f"Scheduled: every hour at minute {minute} UTC. Ctrl-C to stop.")

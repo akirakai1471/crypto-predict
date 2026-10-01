@@ -17,6 +17,22 @@ LABEL_FLAT = 0.0
 LABEL_UP = 1.0
 
 
+def spans_a_gap(index: pd.Index, horizon: int) -> np.ndarray:
+    """True where the bar `horizon` rows ahead is not `horizon` bars ahead in time.
+
+    Labels look ahead by rows. Where the exchange's archive has a hole - six of
+    the twenty symbols are missing days in February and April 2022 - a "24-bar"
+    label beside it measured a move over as much as 96 hours, and taught the
+    model that a day's move can be four days'. Such rows get no label.
+    """
+    if not isinstance(index, pd.DatetimeIndex) or len(index) <= horizon:
+        return np.zeros(len(index), dtype=bool)
+    step = pd.Series(index).diff().median()
+    ahead = pd.Series(index).shift(-horizon)
+    span = ahead - pd.Series(index)
+    return (span.notna() & (span != horizon * step)).to_numpy()
+
+
 def make_labels(
     bars: pd.DataFrame,
     horizon: int,
@@ -35,6 +51,7 @@ def make_labels(
 
     close = bars["close"]
     forward_return = close.shift(-horizon) / close - 1.0
+    forward_return[spans_a_gap(bars.index, horizon)] = np.nan
     band = band_k * atr(bars, atr_period) / close
 
     label = pd.Series(np.nan, index=bars.index, dtype="float64")
@@ -64,8 +81,9 @@ def make_triple_barrier_labels(
 
     n = len(bars)
     label = np.full(n, np.nan)
+    gapped = spans_a_gap(bars.index, horizon)
     for i in range(n - horizon):
-        if not np.isfinite(band[i]):
+        if not np.isfinite(band[i]) or gapped[i]:
             continue
         upper = close[i] * (1 + band[i])
         lower = close[i] * (1 - band[i])

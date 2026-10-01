@@ -110,7 +110,13 @@ def train(
         dataset, n_splits=n_splits, horizon=horizon, config=train_config, n_jobs=jobs
     )
 
-    report = format_evaluation(evaluation, symbol=symbol, interval=interval, threshold=threshold)
+    report = format_evaluation(
+        evaluation,
+        symbol=symbol,
+        interval=interval,
+        coverage=cfg.strategy.signal_coverage,
+        horizon=horizon,
+    )
 
     # The classification report says whether the model knows anything. The
     # backtest says whether that knowledge survives contact with fees.
@@ -137,7 +143,7 @@ def train(
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
     (reports_dir / f"{symbol}_{interval}_{stamp}.txt").write_text(report, encoding="utf-8")
 
-    decision = verdict(evaluation, threshold=threshold)
+    decision = verdict(evaluation, coverage=cfg.strategy.signal_coverage, horizon=horizon)
     summary = {
         "symbol": symbol,
         "interval": interval,
@@ -158,8 +164,16 @@ def train(
     # first let ETHUSDT into the registry at -0.24% after costs, -30.5%
     # drawdown, and negative at doubled costs — a model this project had spent
     # weeks correctly refusing.
+    # No bars means no backtest, and no backtest is not a pass. It used to
+    # default to GO and record `strategy_decision: GO` for a verdict that was
+    # never computed.
     strategy = (
-        strategy_verdict(bt) if bt is not None else {"decision": "GO", "reason": ""}
+        strategy_verdict(bt)
+        if bt is not None
+        else {
+            "decision": "INSUFFICIENT",
+            "reason": f"no raw {interval} klines for {symbol}, so no backtest ran",
+        }
     )
     failures = [
         f"{name} verdict is {v['decision']}: {v['reason']}"
@@ -189,17 +203,7 @@ def train(
     # measured coverage on the final model's own training data, where margins are
     # inflated, reported a healthy 12.87%, and then fired on 0 of 336 live bars.
     # A rule can only be set on data the model has not seen.
-    usable = dataset.iloc[: -horizon or None]
-    holdout_n = min(CUTOFF_HOLDOUT_BARS, len(usable) // 5)
-    final_train = usable.iloc[:-holdout_n]
-    holdout = usable.iloc[-holdout_n:]
-    # Split again. A cutoff is a quantile of some sample, so measuring coverage on
-    # the sample it came from returns the target every time — a check that cannot
-    # fail. The rule is set on the older block and verified on the newest one, so
-    # a regime where margins have narrowed shows up as a failed check instead of
-    # as zero live signals.
-    rule_block = holdout.iloc[: int(len(holdout) * 2 / 3)]
-    verify_block = holdout.iloc[int(len(holdout) * 2 / 3) :]
+    final_train, rule_block, verify_block = final_split(dataset, horizon)
     # Calibrate the final model from out-of-fold runs. The tail-block method is
     # fine inside a fold but degenerate here, where the tail is one recent regime.
     final_config = TrainConfig(
@@ -262,6 +266,11 @@ def train(
         n_train_rows=len(final_train),
         margin_cutoff=cutoff,
         signal_coverage=cfg.strategy.signal_coverage,
+        labels={
+            "horizon": horizon,
+            "atr_period": cfg.labels.atr_period,
+            "band_k": cfg.labels.band_k,
+        },
     )
     typer.echo(f"\nSaved model {version}")
     if override_used:
@@ -271,6 +280,32 @@ def train(
         )
     elif override:
         typer.echo("  (--override was not needed: the gate passed)")
+
+
+def final_split(
+    dataset: pd.DataFrame, horizon: int, holdout_bars: int = CUTOFF_HOLDOUT_BARS
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """(final_train, rule_block, verify_block) for the model that gets saved.
+
+    The holdout is split again. A cutoff is a quantile of some sample, so
+    measuring coverage on the sample it came from returns the target every time
+    - a check that cannot fail. The rule is set on the older block and verified
+    on the newest one, so a regime where margins have narrowed shows up as a
+    failed check instead of as zero live signals.
+
+    A horizon's purge separates training from the holdout, as it separates every
+    walk-forward fold: the last training rows' labels look `horizon` bars ahead,
+    into the block the cutoff is set on. No label is read there, so nothing
+    reported leaked - but the rule should be set on bars the training labels
+    never touched.
+    """
+    usable = dataset.iloc[: -horizon or None]
+    holdout_n = min(holdout_bars, len(usable) // 5)
+    final_train = usable.iloc[: -(holdout_n + horizon)]
+    holdout = usable.iloc[-holdout_n:]
+    rule_block = holdout.iloc[: int(len(holdout) * 2 / 3)]
+    verify_block = holdout.iloc[int(len(holdout) * 2 / 3) :]
+    return final_train, rule_block, verify_block
 
 
 @app.command()

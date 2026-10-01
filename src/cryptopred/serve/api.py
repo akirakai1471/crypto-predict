@@ -23,7 +23,7 @@ from cryptopred.paper.trader import PaperTrader
 from cryptopred.serve import heartbeat, watchdog
 from cryptopred.serve.alerts import read_log
 from cryptopred.serve.drift import coverage_drift
-from cryptopred.serve.predictor import Predictor
+from cryptopred.serve.predictor import LabelMismatchError, Predictor
 from cryptopred.serve.store import PredictionStore
 
 WEB_DIR = Path(__file__).resolve().parents[3] / "web"
@@ -66,6 +66,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             predictors[key] = Predictor.from_registry(cfg, symbol, interval)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except LabelMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return predictors[key]
 
     @app.get("/api/health")
@@ -73,7 +75,21 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         status = []
         for symbol in cfg.data.symbols:
             for interval in cfg.data.intervals:
-                bars = parquet.read("klines", symbol, interval)
+                # One unreadable file costs its own row, not the endpoint: a
+                # 500 here turned the scheduler light to "unknown" while the
+                # heartbeat was fine.
+                try:
+                    n_bars, bars = parquet.tail_summary("klines", symbol, interval)
+                except Exception as exc:  # noqa: BLE001 - reported, not raised
+                    status.append(
+                        {
+                            "symbol": symbol,
+                            "interval": interval,
+                            "bars": None,
+                            "error": f"{type(exc).__name__}: {exc}"[:200],
+                        }
+                    )
+                    continue
                 if bars.empty:
                     status.append({"symbol": symbol, "interval": interval, "bars": 0})
                     continue
@@ -91,7 +107,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                     {
                         "symbol": symbol,
                         "interval": interval,
-                        "bars": int(len(bars)),
+                        "bars": int(n_bars),
                         "last_bar": last.isoformat(),
                         "last_close": last_close.isoformat(),
                         "minutes_behind": round(age, 1),

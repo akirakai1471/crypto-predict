@@ -144,15 +144,17 @@ def test_an_enormous_gap_is_capped(env):
     assert len(gaps) < MAX_GAP_BARS      # this fixture is small; the cap is real
 
 
-def test_bars_too_recent_to_score_are_left_for_the_normal_cycle(env, tmp_path):
-    """A bar whose horizon has not elapsed will be predicted live shortly, and
-    flagging it as backfilled would be wrong."""
+def test_bars_missed_by_a_short_outage_are_filled_on_restart(env, tmp_path):
+    """Recent bars used to be left "for the normal cycle" - which only ever
+    predicts the newest bar. After a six-hour outage the five bars in between
+    stayed empty for a day. Now every closed bar but the newest is filled, and
+    the newest is left for the live prediction that follows."""
     cfg = Config()
     cfg.data.root = tmp_path / "fresh"
     cfg.data.symbols = ["BTCUSDT"]
 
-    now = pd.Timestamp.now(tz="UTC").floor("h")
-    idx = pd.date_range(end=now, periods=40, freq="1h", tz="UTC", name="open_time")
+    last_open = pd.Timestamp.now(tz="UTC").floor("h") - pd.Timedelta(hours=1)
+    idx = pd.date_range(end=last_open, periods=40, freq="1h", tz="UTC", name="open_time")
     bars = make_ohlcv(n=40, seed=5)
     bars.index = idx
     bars["close_time"] = idx + pd.Timedelta(hours=1) - pd.Timedelta(milliseconds=1)
@@ -160,8 +162,46 @@ def test_bars_too_recent_to_score_are_left_for_the_normal_cycle(env, tmp_path):
     parquet = ParquetStore(cfg.data.root / "raw")
     parquet.write("klines", "BTCUSDT", "1h", bars)
     store = PredictionStore(cfg.data.root / "predictions.db")
+    for close_time in bars["close_time"].iloc[:-6]:
+        _record(store, close_time)
+
+    gaps = find_gap_bars(store, parquet, "BTCUSDT", "1h")
+    assert gaps == list(bars["close_time"].iloc[-6:-1])
+
+
+def test_a_bar_that_has_not_closed_is_never_filled(env, tmp_path):
+    cfg = Config()
+    cfg.data.root = tmp_path / "open"
+    now = pd.Timestamp.now(tz="UTC").floor("h")
+    idx = pd.date_range(end=now, periods=10, freq="1h", tz="UTC", name="open_time")
+    bars = make_ohlcv(n=10, seed=6)
+    bars.index = idx
+    bars["close_time"] = idx + pd.Timedelta(hours=1) - pd.Timedelta(milliseconds=1)
+    parquet = ParquetStore(cfg.data.root / "raw")
+    parquet.write("klines", "BTCUSDT", "1h", bars)
+    store = PredictionStore(cfg.data.root / "predictions.db")
     _record(store, bars["close_time"].iloc[0])
 
-    gaps = find_gap_bars(store, parquet, "BTCUSDT", "1h", horizon=24)
-    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=24)
-    assert all(g <= cutoff for g in gaps)
+    gaps = find_gap_bars(store, parquet, "BTCUSDT", "1h")
+    assert all(g <= pd.Timestamp.now(tz="UTC") for g in gaps)
+    assert bars["close_time"].iloc[-1] not in gaps  # still forming
+    assert bars["close_time"].iloc[-2] not in gaps  # newest closed: predicted live
+
+
+def test_the_gap_cap_is_not_undone_by_the_next_cycle(tmp_path):
+    """The cap trimmed the list, and the next cycle filled the older remainder
+    anyway. Now only the last MAX_GAP_BARS bars are ever considered."""
+    cfg = Config()
+    cfg.data.root = tmp_path
+    bars = make_ohlcv(n=MAX_GAP_BARS + 120, seed=1)
+    parquet = ParquetStore(tmp_path / "raw")
+    parquet.write("klines", "BTCUSDT", "1h", bars)
+    store = PredictionStore(tmp_path / "p.db")
+    for close_time in (bars["close_time"].iloc[0], bars["close_time"].iloc[-1]):
+        _record(store, close_time)
+    predictor = FakePredictor(bars)
+
+    first = fill_gaps(cfg, store, parquet, "BTCUSDT", "1h", horizon=4, predictor=predictor)
+    second = fill_gaps(cfg, store, parquet, "BTCUSDT", "1h", horizon=4, predictor=predictor)
+    assert 0 < first["filled"] <= MAX_GAP_BARS
+    assert second["filled"] == 0

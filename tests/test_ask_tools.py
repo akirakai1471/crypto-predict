@@ -135,3 +135,32 @@ def test_every_tool_returns_json_serialisable_output(tools):
     ]
     for payload in payloads:
         json.dumps(payload)
+
+
+def test_track_record_ignores_backfilled_rows(tools, tmp_path):
+    """A backfilled row was predicted after its bar closed. The dashboard and
+    status.bat drop them; ask counted them, and so quoted a different record
+    from the one on the screen beside it."""
+    from cryptopred.serve.store import PredictionStore
+
+    store = PredictionStore(tmp_path / "predictions.db")
+    # Two live rows, both wrong; eight backfilled rows, all right.
+    for hour in range(10):
+        backfilled = hour >= 2
+        store.record_prediction(
+            symbol="BTCUSDT",
+            interval="1h",
+            bar_close_time=pd.Timestamp("2024-02-01", tz="UTC") + pd.Timedelta(hours=hour),
+            proba=(0.2, 0.3, 0.5),
+            signal=1,
+            close_price=42000.0,
+            model_version="v1",
+            was_backfilled=backfilled,
+        )
+    for row in store.unscored("BTCUSDT", "1h").itertuples():
+        backfilled = bool(row.was_backfilled)
+        store.score_prediction(row.id, 0.01, 2 if backfilled else 0, backfilled)
+
+    out = tools.track_record(symbol="BTCUSDT")
+    assert out["n_scored"] == 2
+    assert out["accuracy"]["value"] == 0.0

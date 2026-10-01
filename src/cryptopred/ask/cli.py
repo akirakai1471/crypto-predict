@@ -31,7 +31,7 @@ def _credentials_available() -> bool:
 def _refresh_bars(cfg: Config, interval: str) -> None:
     """Pull any bars that closed since the last run."""
     from cryptopred.ingest.binance import BinanceClient
-    from cryptopred.ingest.runner import run_klines_ingest
+    from cryptopred.ingest.cli import run_klines_ingest
     from cryptopred.ingest.storage import ParquetStore
 
     sync_cfg = cfg.model_copy(deep=True)
@@ -60,7 +60,7 @@ def ask(
     config: Path = typer.Option(None, help="Đường dẫn file config YAML."),
 ) -> None:
     if not _credentials_available():
-        typer.echo(
+        safe_echo(
             "Chưa có thông tin đăng nhập Anthropic.\n"
             "  Cách 1: ant auth login\n"
             "  Cách 2: đặt biến môi trường ANTHROPIC_API_KEY\n"
@@ -78,7 +78,7 @@ def ask(
         except Exception as exc:  # noqa: BLE001 - a stale answer beats no answer
             # Said out loud, not logged. An answer silently computed on old bars
             # reads exactly like one computed on current bars.
-            typer.echo(
+            safe_echo(
                 f"(Không nạp được nến mới: {exc}. Trả lời trên dữ liệu đã lưu — "
                 "xem dòng 'dữ liệu cũ' trong câu trả lời.)"
             )
@@ -91,24 +91,24 @@ def ask(
     )
 
     if as_json:
-        typer.echo(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+        safe_echo(json.dumps(asdict(result), ensure_ascii=False, indent=2))
         return
 
     safe_echo("\n" + result.answer + "\n")
-    typer.echo("-" * 72)
+    safe_echo("-" * 72)
 
     if result.audit["unmatched"]:
-        typer.echo("KHÔNG TRUY ĐƯỢC NGUỒN — các số sau không đến từ tool nào:")
+        safe_echo("KHÔNG TRUY ĐƯỢC NGUỒN — các số sau không đến từ tool nào:")
         for value in result.audit["unmatched"]:
-            typer.echo(f"  {value:,}")
-        typer.echo("  Đừng tin những con số này.")
+            safe_echo(f"  {value:,}")
+        safe_echo("  Đừng tin những con số này.")
     else:
         safe_echo("Mọi con số trong câu trả lời đều truy được về kết quả tool.")
 
     if result.audit.get("limitation"):
         safe_echo(f"Giới hạn hậu kiểm: {result.audit['limitation']}")
 
-    typer.echo(
+    safe_echo(
         f"Token: {result.usage['input_tokens']:,} vào / "
         f"{result.usage['output_tokens']:,} ra   "
         f"Chi phí: ${result.cost_usd:.4f}"

@@ -25,12 +25,13 @@ from cryptopred.serve import heartbeat
 from cryptopred.serve.drift import coverage_drift, format_drift
 from cryptopred.serve.freshness import funding_freshness
 from cryptopred.serve.store import PredictionStore
+from cryptopred.timeframes import interval_to_timedelta
 
 # Below this many scored signals, a hit rate is noise dressed as a result.
 MIN_SIGNALS_FOR_A_CLAIM = 100
 
 
-def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
+def wilson_interval(successes: float, n: int, z: float = 1.96) -> tuple[float, float]:
     """Confidence interval for a proportion, valid at small n.
 
     The normal approximation gives nonsense near 0 and 1 and with few samples —
@@ -45,6 +46,42 @@ def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, flo
     return (max(0.0, centre - margin), min(1.0, centre + margin))
 
 
+def effective_sample(bar_close_times, horizon: pd.Timedelta) -> int:
+    """How many of these outcomes could be kept with no two sharing any of
+    their forward window: the number of independent observations among them.
+
+    Two predictions a few hours apart are scored on almost the same 24 hours of
+    price, so they are nearly one observation, not two.
+    """
+    count, free_from = 0, None
+    for t in sorted(pd.to_datetime(pd.Series(list(bar_close_times)), utc=True)):
+        if free_from is None or t >= free_from:
+            count += 1
+            free_from = t + horizon
+    return count
+
+
+def overlap_interval(
+    correct, bar_close_times, horizon: pd.Timedelta
+) -> tuple[tuple[float, float], int]:
+    """95% interval for a hit rate whose outcomes overlap in time, and the
+    effective sample it rests on.
+
+    Wilson over every scored row treats overlapping 24-hour outcomes as
+    independent trials; simulated with a true rate of 50%, its "95%" interval
+    held the truth 34% of the time over every bar and about 55% over clustered
+    signals. Wilson on the effective sample - the observed rate, over the number
+    of non-overlapping windows - held it 96-98% of the time in the same
+    simulation: conservative, which is the side to err on.
+    """
+    values = [bool(v) for v in correct]
+    if not values:
+        return (0.0, 1.0), 0
+    n_eff = effective_sample(bar_close_times, horizon)
+    rate = sum(values) / len(values)
+    return wilson_interval(rate * n_eff, n_eff), n_eff
+
+
 def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
     store = PredictionStore(cfg.data.root / "predictions.db")
     parquet = ParquetStore(cfg.data.root / "raw")
@@ -54,6 +91,7 @@ def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
 
     registry = ModelRegistry(cfg.data.root / "models")
 
+    horizon = cfg.labels.horizon_bars.get(interval, 24) * interval_to_timedelta(interval)
     per_symbol = []
     for symbol in cfg.data.symbols:
         history = store.history(symbol, interval, limit=100_000)
@@ -91,6 +129,12 @@ def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
         # all while the scheduler is not staying up.
         bf_scored = backfilled[backfilled["actual_return"].notna()]
         bf_correct = int(bf_scored["is_correct"].sum()) if not bf_scored.empty else 0
+        signal_interval, signal_n_eff = overlap_interval(
+            scored_signals["is_correct"], scored_signals["bar_close_time"], horizon
+        )
+        bf_interval, _ = overlap_interval(
+            bf_scored["is_correct"], bf_scored["bar_close_time"], horizon
+        )
 
         closed = store.closed_trades(symbol, limit=100_000)
         rested = (
@@ -111,14 +155,15 @@ def collect(cfg: Config, interval: str = "1h") -> dict[str, Any]:
                 "backfilled_accuracy": (
                     bf_correct / len(bf_scored) if len(bf_scored) else None
                 ),
-                "backfilled_interval_95": wilson_interval(bf_correct, len(bf_scored)),
+                "backfilled_interval_95": bf_interval,
                 "n_signals": int(len(signals)),
                 "n_scored_signals": int(len(scored_signals)),
                 "correct_signals": correct_signals,
                 "signal_accuracy": (
                     correct_signals / len(scored_signals) if len(scored_signals) else None
                 ),
-                "interval_95": wilson_interval(correct_signals, len(scored_signals)),
+                "interval_95": signal_interval,
+                "effective_signals": signal_n_eff,
                 "first_prediction": history["bar_close_time"].min(),
                 "last_prediction": history["bar_close_time"].max(),
                 "pending_orders": int(len(store.pending_orders(symbol))),
@@ -256,6 +301,11 @@ def format_status(status: dict[str, Any], backtest_reference: float = 0.589) -> 
             lines.append(
                 f"  directional result: {s['signal_accuracy']:.1%} "
                 f"({s['correct_signals']}/{n}), 95% CI [{low:.1%}, {high:.1%}]"
+            )
+            lines.append(
+                f"                      the interval counts {s.get('effective_signals', n)} "
+                "independent 24h windows, not "
+                f"{n} signals: overlapping outcomes are not separate trials"
             )
             if n < MIN_SIGNALS_FOR_A_CLAIM:
                 lines.append(

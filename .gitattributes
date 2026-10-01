@@ -1,0 +1,4 @@
+# cmd.exe can misread a .bat with LF line endings: goto and call :label scan
+# in 512-byte blocks and miss a label that straddles one. The .bat files here
+# use goto, so check them out with CRLF whatever the local git settings are.
+*.bat text eol=crlf

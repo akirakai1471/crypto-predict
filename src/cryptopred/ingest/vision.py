@@ -168,9 +168,18 @@ def ingest_klines(
     monthly = list_archives(client, f"data/futures/um/monthly/klines/{symbol}/{interval}/")
     keys = [k for k in monthly if _period_of(k) >= resume_month]
     if include_current_month:
+        # Daily files for every month that has no monthly archive yet - not only
+        # the current one. Early in a month Binance has published the new
+        # month's daily files but not last month's archive; taking only this
+        # month's dailies then stored the 1st beside a hole where the rest of
+        # last month belonged, and resuming from the newest bar never went back.
         daily = list_archives(client, f"data/futures/um/daily/klines/{symbol}/{interval}/")
-        current = cutoff.strftime("%Y-%m")
-        keys += [k for k in daily if _period_of(k).startswith(current)]
+        archived = {_period_of(k) for k in monthly}
+        keys += [
+            k
+            for k in daily
+            if _period_of(k)[:7] not in archived and _period_of(k)[:7] >= resume_month
+        ]
 
     written = 0
     for key in keys:

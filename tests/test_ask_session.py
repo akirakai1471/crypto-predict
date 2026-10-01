@@ -227,3 +227,19 @@ def test_tool_results_are_sent_as_json_not_a_python_repr(cfg):
     )
     parsed = json.loads(block["content"])
     assert parsed["is_stale"] in (True, False)
+
+
+def test_cached_prompt_tokens_are_priced_too():
+    """input_tokens is only the uncached remainder. Pricing it alone left the
+    system prompt and tools out of every question's cost after the first."""
+    from cryptopred.ask.session import _cost
+
+    plain = {"input_tokens": 1000, "output_tokens": 0}
+    cached = {
+        "input_tokens": 1000,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 4000,
+        "cache_read_input_tokens": 10000,
+    }
+    # 1000 + 4000 x 1.25 + 10000 x 0.1 = 7000 input-token equivalents.
+    assert abs(_cost(cached) - 7 * _cost(plain)) < 1e-12

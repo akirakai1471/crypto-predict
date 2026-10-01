@@ -164,3 +164,23 @@ def test_alerts_are_served_verbatim_newest_first(tmp_path, monkeypatch):
 
 def test_alerts_are_empty_before_anything_has_fired(client):
     assert client.get("/api/alerts").json() == {"alerts": []}
+
+
+def test_one_corrupt_parquet_does_not_take_health_down(tmp_path):
+    """A 500 here turned the scheduler light to "unknown" while the heartbeat
+    was fine."""
+    cfg = Config()
+    cfg.data.root = tmp_path
+    cfg.data.symbols = ["BTCUSDT", "ETHUSDT"]
+    cfg.data.intervals = ["1h"]
+    parquet = ParquetStore(tmp_path / "raw")
+    parquet.write("klines", "BTCUSDT", "1h", make_ohlcv(n=50, seed=1))
+    parquet.write("klines", "ETHUSDT", "1h", make_ohlcv(n=50, seed=2))
+    for path in (tmp_path / "raw" / "klines" / "ETHUSDT" / "1h").glob("*.parquet"):
+        path.write_bytes(b"PAR1 half a file")
+
+    response = TestClient(create_app(cfg)).get("/api/health")
+    assert response.status_code == 200
+    rows = {row["symbol"]: row for row in response.json()["data"]}
+    assert rows["BTCUSDT"]["bars"] == 50
+    assert rows["ETHUSDT"]["bars"] is None and "error" in rows["ETHUSDT"]

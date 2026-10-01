@@ -40,6 +40,12 @@ MODEL = "claude-opus-5"
 # Anthropic list price, dollars per million tokens, cached 2026-09-21.
 INPUT_PER_MTOK = 5.00
 OUTPUT_PER_MTOK = 25.00
+# Prompt-cache prices as multiples of the input price: a 5-minute cache write
+# (the system prompt's ephemeral marker) costs 1.25x, a cache read 0.1x.
+# `input_tokens` counts only the uncached remainder, so leaving these out
+# under-reported every question after the first by the whole cached prefix.
+CACHE_WRITE_MULTIPLIER = 1.25
+CACHE_READ_MULTIPLIER = 0.10
 
 # Requests the model may make for one question. A question needs a handful of
 # tool calls; well past that the model is looping, and every extra round costs
@@ -78,7 +84,12 @@ def answer_question(
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
     tool_payloads: list[Any] = []
     called: list[str] = []
-    usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
+    usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
 
     response = None
     for _ in range(MAX_REQUESTS):
@@ -189,6 +200,9 @@ def _accumulate(usage: dict[str, int], response: Any) -> None:
         return
     usage["input_tokens"] += int(getattr(u, "input_tokens", 0) or 0)
     usage["output_tokens"] += int(getattr(u, "output_tokens", 0) or 0)
+    usage["cache_creation_input_tokens"] += int(
+        getattr(u, "cache_creation_input_tokens", 0) or 0
+    )
     usage["cache_read_input_tokens"] += int(
         getattr(u, "cache_read_input_tokens", 0) or 0
     )
@@ -199,7 +213,12 @@ def _empty_audit() -> dict[str, Any]:
 
 
 def _cost(usage: dict[str, int]) -> float:
+    input_equivalent = (
+        usage["input_tokens"]
+        + usage.get("cache_creation_input_tokens", 0) * CACHE_WRITE_MULTIPLIER
+        + usage.get("cache_read_input_tokens", 0) * CACHE_READ_MULTIPLIER
+    )
     return (
-        usage["input_tokens"] / 1e6 * INPUT_PER_MTOK
+        input_equivalent / 1e6 * INPUT_PER_MTOK
         + usage["output_tokens"] / 1e6 * OUTPUT_PER_MTOK
     )

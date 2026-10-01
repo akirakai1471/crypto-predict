@@ -18,7 +18,7 @@ from cryptopred.paper.trader import PaperTrader
 from cryptopred.serve import heartbeat
 from cryptopred.serve.alerts import format_alert, notify, should_alert
 from cryptopred.serve.gapfill import fill_gaps
-from cryptopred.serve.predictor import Predictor
+from cryptopred.serve.predictor import LabelMismatchError, Predictor
 from cryptopred.serve.scoring import score_pending
 from cryptopred.serve.store import PredictionStore
 from cryptopred.timeframes import interval_to_timedelta
@@ -62,73 +62,36 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
     for symbol in cfg.data.symbols:
         try:
             predictor = Predictor.from_registry(cfg, symbol, interval)
-        except FileNotFoundError:
-            logger.warning("no model for %s %s, skipping prediction", symbol, interval)
-            continue
+        except LabelMismatchError:
+            logger.exception("%s %s: not predicting", symbol, interval)
+            predictor = None
+        except FileNotFoundError as exc:
+            # No new predictions without a model - but the open positions and
+            # unscored rows it already made still close and score below. This
+            # used to `continue` past them too, and a half-saved model froze a
+            # symbol's whole ledger while the heartbeat said all was well.
+            # A warning, not an error: most symbols have no model by design,
+            # because a model is only saved when it passes the gates.
+            logger.warning(
+                "no model for %s %s (%s): not predicting; still scoring and "
+                "closing what is open",
+                symbol, interval, exc,
+            )
+            predictor = None
 
-        # Bars that closed while the machine was off get a flagged row, so a
-        # shutdown leaves a visible gap rather than an invisible one.
-        gaps = fill_gaps(
-            cfg, predictions, parquet, symbol, interval,
-            horizon=horizon, predictor=predictor,
-        )
-        counts["backfilled"] += gaps["filled"]
-
-        prediction = predictor.predict_latest(symbol, interval)
-        if prediction is not None:
-            recorded = predictions.record_prediction(
+        if predictor is not None:
+            _predict_and_trade(
+                cfg=cfg,
                 symbol=symbol,
                 interval=interval,
-                bar_close_time=prediction.bar_close_time,
-                proba=prediction.proba,
-                signal=prediction.signal,
-                close_price=prediction.close_price,
-                model_version=prediction.model_version,
+                horizon=horizon,
+                predictor=predictor,
+                predictions=predictions,
+                parquet=parquet,
+                trader=trader,
+                execution=execution,
+                counts=counts,
             )
-            if recorded:
-                counts["predictions"] += 1
-                bars = parquet.read("klines", symbol, interval)
-                entry_time = bars.index.max()
-                last_close = float(bars["close"].iloc[-1])
-
-                # This bar's row is already in the log by now. should_alert
-                # looks only at signals before this bar, so a signal never
-                # suppresses itself, and the row is unscored, so the record
-                # quoted in the alert is the record as of before this bet.
-                if prediction.signal != 0:
-                    counts["alerts"] += _maybe_alert(
-                        cfg=cfg,
-                        symbol=symbol,
-                        interval=interval,
-                        prediction=prediction,
-                        close_price=last_close,
-                        horizon=horizon,
-                        predictions=predictions,
-                        trader=trader,
-                        predictor=predictor,
-                    )
-
-                if execution is None:
-                    if trader.open_from_signal(
-                        symbol=symbol,
-                        interval=interval,
-                        signal=prediction.signal,
-                        entry_time=entry_time,
-                        entry_price=last_close,
-                        model_version=prediction.model_version,
-                        horizon=horizon,
-                    ):
-                        counts["opened"] += 1
-                elif trader.post_limit(
-                    symbol=symbol,
-                    interval=interval,
-                    signal=prediction.signal,
-                    signal_time=entry_time,
-                    signal_close=last_close,
-                    model_version=prediction.model_version,
-                    horizon=horizon,
-                ):
-                    counts["opened"] += 1
 
         # Resting orders are resolved before anything else uses positions, so
         # a limit that filled this bar is a position for the rest of the cycle.
@@ -153,6 +116,107 @@ def run_cycle(cfg: Config, interval: str = "1h") -> dict[str, int]:
     # Written last: a heartbeat should mean the cycle finished, not that it began.
     heartbeat.write(cfg.data.root / "heartbeat.json", interval, counts)
     return counts
+
+
+def _predict_and_trade(
+    cfg: Config,
+    symbol: str,
+    interval: str,
+    horizon: int,
+    predictor: Predictor,
+    predictions: PredictionStore,
+    parquet: ParquetStore,
+    trader: PaperTrader,
+    execution,
+    counts: dict[str, int],
+) -> None:
+    """Fill gaps, log the newest bar's prediction, place its order, alert."""
+    # Bars that closed while the machine was off get a flagged row, so a
+    # shutdown leaves a visible gap rather than an invisible one.
+    gaps = fill_gaps(
+        cfg, predictions, parquet, symbol, interval,
+        horizon=horizon, predictor=predictor,
+    )
+    counts["backfilled"] += gaps["filled"]
+
+    prediction = predictor.predict_latest(symbol, interval)
+    if prediction is None:
+        return
+    recorded = predictions.record_prediction(
+        symbol=symbol,
+        interval=interval,
+        bar_close_time=prediction.bar_close_time,
+        proba=prediction.proba,
+        signal=prediction.signal,
+        close_price=prediction.close_price,
+        model_version=prediction.model_version,
+    )
+    if recorded:
+        counts["predictions"] += 1
+
+    # What gets traded is the row of record for this bar - the first one
+    # written - not whatever this run computed: after a retrain in the same
+    # hour the two can differ, and the log is the truth.
+    row = predictions.prediction_at(symbol, interval, prediction.bar_close_time)
+    if row is None or int(row["signal"]) == 0:
+        return
+    signal = int(row["signal"])
+    model_version = str(row["model_version"])
+
+    bars = parquet.read("klines", symbol, interval)
+    signal_time = bars.index.max()
+    last_close = float(bars["close"].iloc[-1])
+
+    # The order goes in before the alert, and on every run for this bar rather
+    # than only the run that logged it: the insert is keyed on the signal bar,
+    # so a repeat is a no-op. Placed after the alert and only when `recorded`,
+    # a cycle that died in between - a Telegram send can take ten seconds -
+    # logged a signal that the paper ledger never traded, and no retry could
+    # put it back.
+    if execution is None:
+        # A market order sent now fills during the next bar. Entered on the
+        # signal bar itself, the trade was closed one bar early: held H-1 bars
+        # where the backtest and the labels hold H.
+        opened = trader.open_from_signal(
+            symbol=symbol,
+            interval=interval,
+            signal=signal,
+            entry_time=signal_time + interval_to_timedelta(interval),
+            entry_price=last_close,
+            model_version=model_version,
+            horizon=horizon,
+            signal_time=signal_time,
+        )
+    else:
+        opened = trader.post_limit(
+            symbol=symbol,
+            interval=interval,
+            signal=signal,
+            signal_time=signal_time,
+            signal_close=last_close,
+            model_version=model_version,
+            horizon=horizon,
+        )
+    if opened:
+        counts["opened"] += 1
+
+    # Alerts stay at most once: only the run that logged the row sends one.
+    # This bar's row is already in the log by now. should_alert looks only at
+    # signals before this bar, so a signal never suppresses itself, and the row
+    # is unscored, so the record quoted in the alert is the record as of before
+    # this bet.
+    if recorded and prediction.signal != 0:
+        counts["alerts"] += _maybe_alert(
+            cfg=cfg,
+            symbol=symbol,
+            interval=interval,
+            prediction=prediction,
+            close_price=last_close,
+            horizon=horizon,
+            predictions=predictions,
+            trader=trader,
+            predictor=predictor,
+        )
 
 
 def _maybe_alert(

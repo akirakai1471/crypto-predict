@@ -90,6 +90,8 @@ class FeedResult:
     # True when this is the feed's first success since the process started or
     # since an outage: its items may be days old. See news/store.py.
     backlog: bool = False
+    # ETag / Last-Modified from a 200, for the next poll's conditional GET.
+    validators: dict[str, str] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -139,11 +141,26 @@ class FeedFetcher:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def fetch_all(self) -> list[FeedResult]:
-        return [self.fetch(feed) for feed in self.feeds]
+    def fetch_all(self, remember: bool = True) -> list[FeedResult]:
+        return [self.fetch(feed, remember=remember) for feed in self.feeds]
 
-    def fetch(self, feed: FeedConfig) -> FeedResult:
-        """Fetch and parse one feed. Never raises."""
+    def remember(self, result: FeedResult) -> None:
+        """Use this result's validators for the feed's next conditional GET.
+
+        Called by the poller once the result's headlines are safely stored, not
+        when they arrive: remembered first, a store that failed - "database is
+        locked" - turned the next poll into a 304, and the headlines it never
+        stored were not offered again until the publisher changed the feed.
+        """
+        if result.status == "ok":
+            self._validators[result.url] = result.validators
+
+    def fetch(self, feed: FeedConfig, remember: bool = True) -> FeedResult:
+        """Fetch and parse one feed. Never raises.
+
+        With remember=False the caller must pass the result to remember() once
+        it has done with it; see there.
+        """
         token = _FETCHING.set(True)
         try:
             result = self._fetch(feed)
@@ -175,6 +192,8 @@ class FeedFetcher:
         last = self._last_success.get(feed.url)
         result.backlog = last is None or (now - last) > BACKLOG_AFTER_SECONDS
         self._last_success[feed.url] = now
+        if remember:
+            self.remember(result)
         return result
 
     def _fetch(self, feed: FeedConfig) -> FeedResult:
@@ -219,8 +238,11 @@ class FeedFetcher:
             base_url = str(response.url)
 
         entries = parse_feed(bytes(body), base_url=base_url, source=feed.name)
-        # Remembered only once the body parsed. Keeping the validators of a
-        # body that failed would turn every later poll into a 304 for content
-        # never read, until the publisher happened to change it.
-        self._validators[feed.url] = validators
-        return FeedResult(feed.name, feed.url, "ok", entries=entries, http_status=200)
+        # Carried on the result, and remembered only for a body that parsed.
+        # Keeping the validators of a body that failed would turn every later
+        # poll into a 304 for content never read, until the publisher happened
+        # to change it.
+        return FeedResult(
+            feed.name, feed.url, "ok", entries=entries, http_status=200,
+            validators=validators,
+        )

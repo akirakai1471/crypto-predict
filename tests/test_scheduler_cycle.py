@@ -43,3 +43,31 @@ def test_every_cycle_refreshes_funding_as_well_as_bars(tmp_path, monkeypatch):
     counts = runner.run_cycle(cfg, interval="1h")
     assert calls == ["klines", "funding"]
     assert counts["funding"] == 0
+
+
+def test_without_a_console_the_scheduler_still_logs_to_a_file(tmp_path, monkeypatch):
+    """install-task.bat runs the scheduler under pythonw, where sys.stderr is
+    None: every log line, the traceback of a failed cycle included, went
+    nowhere."""
+    import logging
+    import sys
+
+    from cryptopred.serve import cli
+
+    cfg = Config()
+    cfg.data.root = tmp_path
+    monkeypatch.setattr(sys, "stderr", None)
+    root = logging.getLogger()
+    before = list(root.handlers)
+    try:
+        path = cli.setup_scheduler_logging(cfg)
+        logging.getLogger("cryptopred.serve.runner").error("cycle failed: boom")
+        for handler in root.handlers:
+            handler.flush()
+    finally:
+        for handler in root.handlers[:]:
+            if handler not in before:
+                root.removeHandler(handler)
+                handler.close()
+    assert path == tmp_path / "logs" / "scheduler.log"
+    assert "cycle failed: boom" in path.read_text(encoding="utf-8")

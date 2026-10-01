@@ -117,3 +117,67 @@ def test_a_price_beside_a_date_is_still_checked():
     report = audit_answer("Ngày 21/09/2026 giá về 2900.", tool_numbers=[])
     assert report["ok"] is False
     assert 2900.0 in report["unmatched"]
+
+
+# -- review findings, 2026-09-30: figures that passed without a source ----------
+
+
+TOOLS = [0.352, 0.461, 61.0, 24.0, 72.0, 84560.6, -0.0118, 66.1, 2401.0]
+
+
+def test_a_percentage_cannot_borrow_a_match_from_a_wait_time():
+    """"khoảng 60%" passed because 60 is within 2% of a 61-hour wait. Rates
+    are fractions in every tool, so a percentage matches only value x 100."""
+    report = audit_answer("xác suất khoảng 60%", TOOLS)
+    assert report["ok"] is False and 60.0 in report["unmatched"]
+    assert audit_answer("xác suất 35,2%", TOOLS)["ok"] is True
+
+
+def test_a_bare_figure_cannot_borrow_a_match_from_a_fraction():
+    """35 is not 0.352, and 0.61 is not the 61-hour wait."""
+    report = audit_answer("chỉ số khoảng 35, hệ số 0,61", [0.352, 61.0])
+    assert sorted(report["unmatched"]) == [0.61, 35.0]
+
+
+def test_phan_tram_is_a_percent_sign():
+    assert audit_answer("60 phần trăm số lần", TOOLS)["ok"] is False
+    assert audit_answer("46,1 phần trăm số lần", TOOLS)["ok"] is True
+
+
+def test_thousands_words_scale_the_figure():
+    assert audit_answer("giá có thể về 90K", TOOLS)["ok"] is False
+    assert audit_answer("giá có thể về 70 nghìn USD", TOOLS)["ok"] is False
+    assert audit_answer("giá đang ở 84,56K", TOOLS)["ok"] is True
+
+
+def test_a_typeset_minus_is_a_minus():
+    assert audit_answer("đổi 24h: −1,18%", TOOLS)["ok"] is True
+    assert audit_answer("đổi 24h: −5%", TOOLS)["ok"] is False
+
+
+def test_a_small_integer_reading_is_checked_but_its_period_is_not():
+    """"RSI-14 đang ở 85": 14 is the indicator's period, 85 is a claim."""
+    report = audit_answer("RSI-14 đang ở 85", TOOLS)
+    assert report["unmatched"] == [85.0]
+    assert audit_answer("RSI-14 đang ở 66,1", TOOLS)["ok"] is True
+
+
+def test_counts_durations_and_list_numbers_stay_exempt():
+    text = "1. Trong 72 giờ, 2 kịch bản.\n2) Xem 3 mức và 5 nguồn trong 2 tuần."
+    assert audit_answer(text, TOOLS)["ok"] is True
+
+
+def test_a_clock_time_is_not_a_claim():
+    assert audit_answer("nến đóng lúc 07:00 UTC", [])["ok"] is True
+
+
+def test_a_decimal_comma_has_no_thousands_reading():
+    """"0,61" is 0.61. Read the English way it became 061 = 61."""
+    assert extract_numbers("0,61") == [0.61]
+    assert extract_numbers("58,4") == [58.4]
+    assert sorted(extract_numbers("2.500")) == [2.5, 2500.0]  # genuinely ambiguous
+
+
+def test_a_lower_case_word_before_a_number_is_not_an_indicator_name():
+    assert audit_answer("chỉ số khoảng 35", [])["unmatched"] == [35.0]
+    assert audit_answer("EMA20 và RSI 14", [])["ok"] is True

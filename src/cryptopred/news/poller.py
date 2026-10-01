@@ -61,7 +61,7 @@ def poll_once(
     caught here: a database that cannot be written means the pass did not
     happen, and it must not be logged as though it did.
     """
-    results = fetcher.fetch_all()
+    results = fetcher.fetch_all(remember=False)
     # One stamp for the whole pass, read after the last response arrived: never
     # earlier than any headline was actually in hand, which is the only
     # direction received_at must not err in.
@@ -73,6 +73,9 @@ def poll_once(
                 result.entries, source=result.name, backlog=result.backlog,
                 received_at=received_at,
             )
+        # Only now: a feed whose rows did not reach the store must be fetched
+        # in full next time, not answered with a 304.
+        fetcher.remember(result)
     summary = PollSummary(results=results, inserted=inserted)
     store.record_poll(
         feeds_ok=summary.feeds_ok,

@@ -24,6 +24,42 @@ DOWN, FLAT, UP = 0, 1, 2
 # (the 720-bar volatility percentile), with room to spare.
 MIN_WARMUP_BARS = 900
 
+# How much history the live features are built from. Not MIN_WARMUP_BARS x 2:
+# the daily features (d1_rsi_14, d1_ema_dist_20, d1_atr_norm) are recursive
+# averages over daily bars, and 1,800 hourly bars is only 75 days of them. On
+# real BTC, d1_rsi_14 then sat up to 1.5 RSI points from the value training
+# computed on full history, and about 6% of live signals came out differently.
+# 7,200 bars (300 days) agrees with full history to 1e-7 at 0.21 s a build;
+# full history agrees exactly but costs 1.2 s, and gap-fill builds once a bar.
+LIVE_WINDOW_BARS = 7200
+
+
+class LabelMismatchError(ValueError):
+    """The saved model was trained on different labels from the ones the live
+    loop scores and trades by."""
+
+
+def check_labels(metadata: dict[str, Any], cfg: Config, interval: str) -> None:
+    """Refuse a model whose label definition differs from the config's.
+
+    Models saved before the definition was recorded carry none, and pass: they
+    were all trained on the config of their day, which is the one in use.
+    """
+    saved = metadata.get("labels") or {}
+    expected = {
+        "horizon": cfg.labels.horizon_bars.get(interval, 24),
+        "atr_period": cfg.labels.atr_period,
+        "band_k": cfg.labels.band_k,
+    }
+    wrong = {k: (saved[k], v) for k, v in expected.items() if k in saved and saved[k] != v}
+    if wrong:
+        detail = ", ".join(f"{k} model={m} config={c}" for k, (m, c) in wrong.items())
+        raise LabelMismatchError(
+            f"model {metadata.get('version')} was trained on different labels "
+            f"({detail}); it would be scored and traded as something it is not. "
+            "Retrain with the current config, or restore the config it was trained on."
+        )
+
 
 @dataclass
 class Prediction:
@@ -69,7 +105,9 @@ class Predictor:
                 f"no model in the registry for {symbol} {interval}. "
                 "Train one with `cryptopred-model train --save`."
             )
-        return cls(cfg, registry.load(version), ParquetStore(cfg.data.root / "raw"))
+        bundle = registry.load(version)
+        check_labels(bundle.metadata, cfg, interval)
+        return cls(cfg, bundle, ParquetStore(cfg.data.root / "raw"))
 
     def predict_latest(self, symbol: str, interval: str) -> Prediction | None:
         """Predict from the most recently closed bar, or None if data is short."""
@@ -92,7 +130,7 @@ class Predictor:
         if len(bars) < MIN_WARMUP_BARS:
             return None
 
-        window = bars.tail(MIN_WARMUP_BARS * 2)
+        window = bars.tail(LIVE_WINDOW_BARS)
         funding = self.store.read("funding", symbol, "8h")
         features = build_features(
             window,

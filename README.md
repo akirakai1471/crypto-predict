@@ -244,6 +244,17 @@ như đã chết. Đây là rủi ro lớn nhất của một thí nghiệm nhi�
 sau một giờ, mọi thứ khác vẫn chạy bình thường, và triệu chứng duy nhất là log
 ngừng lớn — không ai nhận ra cho tới lúc quay lại.
 
+**Vì sao nó dừng:** xem `data/logs/scheduler.log`. Khi chạy bằng task
+(`install-task.bat`, dưới `pythonw`) không có cửa sổ nào, nên trước đây lỗi của
+một chu kỳ không được ghi ở đâu cả; giờ mọi dòng log nằm trong file đó (xoay
+vòng, tối đa 3 × 5 MB).
+
+**Đã cài task trước ngày 2026-10-01? Chạy lại `install-task.bat` một lần.**
+Task tạo bằng `schtasks` mặc định bị Windows **dừng sau 72 giờ** và khi máy
+chuyển sang pin; bản mới gỡ cả hai giới hạn. Kiểm tra:
+`schtasks /Query /TN "cryptopred scheduler" /XML | findstr /i "ExecutionTimeLimit Batteries"`
+— phải thấy `PT0S` và `false`.
+
 Xem kết quả bất cứ lúc nào: nhấp đúp `status.bat`, hoặc
 
 ```bash
