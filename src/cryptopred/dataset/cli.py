@@ -7,6 +7,7 @@ from pathlib import Path
 
 import typer
 
+from cryptopred.atomic import replace_atomically
 from cryptopred.config import Config, load_config
 from cryptopred.dataset.builder import build_dataset, dataset_path
 from cryptopred.dataset.quality import format_report, quality_report
@@ -64,7 +65,9 @@ def run_build(
                 continue
 
             path = dataset_path(cfg, symbol, interval, horizon)
-            dataset.to_parquet(path, engine="pyarrow", index=True)
+            replace_atomically(
+                path, lambda tmp, d=dataset: d.to_parquet(tmp, engine="pyarrow", index=True)
+            )
             written.append(path)
 
             if not quiet:

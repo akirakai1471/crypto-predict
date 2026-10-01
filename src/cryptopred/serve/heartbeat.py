@@ -19,6 +19,8 @@ from typing import Any
 
 import pandas as pd
 
+from cryptopred.atomic import write_text_atomically
+
 # A 1h scheduler runs hourly. Two missed cycles is a problem worth naming.
 STALE_AFTER_MINUTES = 150
 
@@ -34,7 +36,8 @@ def write(path: Path, interval: str, counts: dict[str, int]) -> None:
             "pid": os.getpid(),
             "counts": counts,
         }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        # A torn file reads as "corrupt", which status reports as a fault.
+        write_text_atomically(path, json.dumps(payload, indent=2))
     except OSError:
         pass
     ping_external()

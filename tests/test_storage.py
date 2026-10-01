@@ -1,3 +1,5 @@
+import contextlib
+
 import pandas as pd
 
 from cryptopred.ingest.storage import ParquetStore, merge_frames
@@ -81,3 +83,27 @@ def test_last_open_time(tmp_path):
     assert store.last_open_time("klines", "BTCUSDT", "1h") == pd.Timestamp(
         "2024-01-01 02:00", tz="UTC"
     )
+
+
+# -- review findings, 2026-10-01: a kill mid-write ------------------------------
+
+
+def test_a_write_killed_half_way_leaves_the_old_file_readable(tmp_path, monkeypatch):
+    """The current year's file is rewritten every hour. Written in place, a
+    kill mid-write left it truncated, and every later read raised."""
+    store = ParquetStore(tmp_path)
+    store.append("klines", "BTCUSDT", "1h", _frame("2024-01-01", 3))
+
+    def killed(self, path, *args, **kwargs):
+        with open(path, "wb") as fh:
+            fh.write(b"PAR1 half a file")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", killed)
+    with contextlib.suppress(KeyboardInterrupt):
+        store.append("klines", "BTCUSDT", "1h", _frame("2024-01-01 03:00", 2))
+    monkeypatch.undo()
+
+    assert len(store.read("klines", "BTCUSDT", "1h")) == 3
+    leftovers = [p.name for p in (tmp_path / "klines" / "BTCUSDT" / "1h").iterdir()]
+    assert leftovers == ["2024.parquet"]

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import pickle
+import shutil
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -78,8 +79,46 @@ class ModelRegistry:
         # Millisecond precision so two saves in the same second stay distinct.
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")[:-3]
         version = f"{symbol}_{interval}_{stamp}"
-        directory = self.root / version
+        # Built under a hidden name and renamed into place whole. Saved in
+        # place, a save killed half-way left the newest-named directory with no
+        # metadata - and latest() picked it, so the scheduler stopped loading a
+        # model for that symbol while the good one sat beside it.
+        directory = self.root / f".{version}.partial"
         directory.mkdir(parents=True, exist_ok=True)
+        try:
+            self._write(
+                directory,
+                version,
+                result,
+                symbol,
+                interval,
+                metrics,
+                config,
+                n_train_rows,
+                margin_cutoff,
+                signal_coverage,
+            )
+            directory.rename(self.root / version)
+        except BaseException:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
+        # Guarantee a distinct timestamp for a subsequent save in the same tick.
+        time.sleep(0.002)
+        return version
+
+    @staticmethod
+    def _write(
+        directory: Path,
+        version: str,
+        result: FoldResult,
+        symbol: str,
+        interval: str,
+        metrics: dict[str, Any],
+        config: TrainConfig,
+        n_train_rows: int | None,
+        margin_cutoff: float | None,
+        signal_coverage: float | None,
+    ) -> None:
 
         result.booster.save_model(str(directory / "model.txt"))
         if result.calibrators is not None:
@@ -110,9 +149,6 @@ class ModelRegistry:
         (directory / "metadata.json").write_text(
             json.dumps(metadata, indent=2, default=str, ensure_ascii=False), encoding="utf-8"
         )
-        # Guarantee a distinct timestamp for a subsequent save in the same tick.
-        time.sleep(0.002)
-        return version
 
     def load(self, version: str) -> ModelBundle:
         directory = self.root / version
@@ -143,8 +179,15 @@ class ModelRegistry:
             prefix = f"{symbol}_"
             if interval:
                 prefix = f"{symbol}_{interval}_"
+        # A version is a directory with its metadata in it. A save in progress
+        # (".…partial") or one killed before this change landed is not.
         return sorted(
-            d.name for d in self.root.iterdir() if d.is_dir() and d.name.startswith(prefix)
+            d.name
+            for d in self.root.iterdir()
+            if d.is_dir()
+            and not d.name.startswith(".")
+            and d.name.startswith(prefix)
+            and (d / "metadata.json").exists()
         )
 
     def latest(self, symbol: str, interval: str) -> str | None:

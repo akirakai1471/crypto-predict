@@ -255,3 +255,32 @@ def test_a_model_saved_without_a_cutoff_records_none(tmp_path):
         result, symbol="BTCUSDT", interval="1h", metrics={}, config=TrainConfig()
     )
     assert registry.load(version).metadata["margin_cutoff"] is None
+
+
+# -- review findings, 2026-10-01: a save killed half-way --------------------------
+
+
+def test_a_half_saved_model_does_not_hide_the_good_one(tmp_path):
+    """Saved in place, a killed save left the newest-named directory without
+    metadata.json; latest() chose it and load() raised on every cycle while the
+    good model sat beside it."""
+    registry = ModelRegistry(tmp_path)
+    good = registry.save(_fold_result()[1], "BTCUSDT", "1h", {"accuracy": 0.5}, TrainConfig())
+    (tmp_path / "BTCUSDT_1h_29991231T235959999").mkdir()  # a killed save, pre-fix
+    (tmp_path / ".BTCUSDT_1h_29991231T235959998.partial").mkdir()  # one in flight
+
+    assert registry.latest("BTCUSDT", "1h") == good
+    assert registry.list_versions() == [good]
+    registry.load(registry.latest("BTCUSDT", "1h"))
+
+
+def test_a_failed_save_leaves_nothing_behind(tmp_path, monkeypatch):
+    registry = ModelRegistry(tmp_path)
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ModelRegistry, "_write", staticmethod(boom))
+    with pytest.raises(OSError):
+        registry.save(_fold_result()[1], "BTCUSDT", "1h", {}, TrainConfig())
+    assert list(tmp_path.iterdir()) == []
