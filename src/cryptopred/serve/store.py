@@ -77,6 +77,18 @@ CREATE INDEX IF NOT EXISTS idx_trades_status ON paper_trades (status);
 """
 
 
+# One bar, one prediction: the first row written for it. The table's unique key
+# includes model_version, so a retrain and restart within the hour used to log
+# the same bar twice - two alerts, and the bar counted twice in every rate.
+# New rows are refused at insert (record_prediction); rows already duplicated in
+# an existing log are left in place, because this log is never rewritten, and
+# every reader below sees only the first.
+_FIRST_ROW_PER_BAR = (
+    " AND id IN (SELECT MIN(id) FROM predictions"
+    " WHERE symbol = ? AND interval = ? GROUP BY bar_close_time)"
+)
+
+
 PREDICTION_MIGRATIONS = [
     "ALTER TABLE predictions ADD COLUMN was_backfilled INTEGER DEFAULT 0",
 ]
@@ -171,7 +183,8 @@ class PredictionStore:
         model_version: str,
         was_backfilled: bool = False,
     ) -> bool:
-        """Insert a prediction. Returns False if this bar was already recorded."""
+        """Insert a prediction. Returns False if this bar was already recorded,
+        by any model version."""
         prob_down, prob_flat, prob_up = proba
         with self._connect() as conn:
             cursor = conn.execute(
@@ -180,7 +193,11 @@ class PredictionStore:
                     (symbol, interval, bar_close_time, prob_down, prob_flat, prob_up,
                      signal, confidence, close_price, model_version, created_at,
                      was_backfilled)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM predictions
+                    WHERE symbol = ? AND interval = ? AND bar_close_time = ?
+                )
                 """,
                 (
                     symbol,
@@ -195,9 +212,24 @@ class PredictionStore:
                     model_version,
                     pd.Timestamp.now(tz="UTC").isoformat(),
                     int(was_backfilled),
+                    symbol,
+                    interval,
+                    bar_close_time.isoformat(),
                 ),
             )
             return cursor.rowcount > 0
+
+    def prediction_at(
+        self, symbol: str, interval: str, bar_close_time: pd.Timestamp
+    ) -> dict[str, Any] | None:
+        """The prediction of record for one bar: the first row written for it."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM predictions WHERE symbol = ? AND interval = ? "
+                "AND bar_close_time = ? ORDER BY id LIMIT 1",
+                (symbol, interval, pd.Timestamp(bar_close_time).isoformat()),
+            ).fetchone()
+            return dict(row) if row else None
 
     def unscored(self, symbol: str, interval: str) -> pd.DataFrame:
         """Predictions whose outcome has not been filled in yet."""
@@ -231,18 +263,18 @@ class PredictionStore:
         clause = " AND actual_return IS NOT NULL" if scored_only else ""
         with self._connect() as conn:
             return pd.read_sql_query(
-                f"SELECT * FROM predictions WHERE symbol = ? AND interval = ?{clause} "
-                "ORDER BY bar_close_time DESC LIMIT ?",
+                f"SELECT * FROM predictions WHERE symbol = ? AND interval = ?{clause}"
+                f"{_FIRST_ROW_PER_BAR} ORDER BY bar_close_time DESC LIMIT ?",
                 conn,
-                params=(symbol, interval, limit),
+                params=(symbol, interval, symbol, interval, limit),
             )
 
     def latest_prediction(self, symbol: str, interval: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM predictions WHERE symbol = ? AND interval = ? "
-                "ORDER BY bar_close_time DESC LIMIT 1",
-                (symbol, interval),
+                "SELECT * FROM predictions WHERE symbol = ? AND interval = ?"
+                f"{_FIRST_ROW_PER_BAR} ORDER BY bar_close_time DESC LIMIT 1",
+                (symbol, interval, symbol, interval),
             ).fetchone()
             return dict(row) if row else None
 
@@ -268,8 +300,9 @@ class PredictionStore:
                 FROM predictions
                 WHERE symbol = ? AND interval = ? AND actual_return IS NOT NULL
                   AND COALESCE(was_backfilled, 0) = 0
-                """,
-                (symbol, interval),
+                """
+                + _FIRST_ROW_PER_BAR,
+                (symbol, interval, symbol, interval),
             ).fetchone()
 
         n = row["n"] or 0
@@ -292,7 +325,9 @@ class PredictionStore:
         entry_price: float,
         size_usd: float,
         model_version: str,
+        signal_time: pd.Timestamp | None = None,
     ) -> bool:
+        signal_time = entry_time if signal_time is None else signal_time
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -305,7 +340,7 @@ class PredictionStore:
                     symbol,
                     interval,
                     int(direction),
-                    entry_time.isoformat(),
+                    pd.Timestamp(signal_time).isoformat(),
                     entry_time.isoformat(),
                     float(entry_price),
                     float(size_usd),

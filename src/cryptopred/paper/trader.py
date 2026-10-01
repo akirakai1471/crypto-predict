@@ -52,7 +52,11 @@ class PaperTrader:
         entry_price: float,
         model_version: str,
         horizon: int,
+        signal_time: pd.Timestamp | None = None,
     ) -> bool:
+        """Open at market. `signal_time` is the bar that produced the signal and
+        keys the trade; `entry_time` is the bar the fill happens in, the next
+        one. Without a signal_time the two are taken to be the same bar."""
         if signal == 0:
             return False
         return self.store.open_trade(
@@ -63,6 +67,7 @@ class PaperTrader:
             entry_price=entry_price,
             size_usd=self.position_size(symbol, interval, horizon),
             model_version=model_version,
+            signal_time=signal_time,
         )
 
     # --- maker execution -------------------------------------------------

@@ -39,13 +39,21 @@ def find_gap_bars(
     parquet: ParquetStore,
     symbol: str,
     interval: str,
-    horizon: int,
+    horizon: int | None = None,
 ) -> list[pd.Timestamp]:
-    """Bars that closed with no prediction recorded, newest-first order preserved.
+    """Closed bars with no prediction recorded, oldest first.
 
-    Only bars old enough to be scoreable are returned. A bar whose horizon has
-    not elapsed will be predicted by the next normal cycle anyway, and doing it
-    here would flag a row as backfilled for no reason.
+    Every closed bar except the newest, which the cycle predicts live straight
+    after this. Bars whose horizon has not elapsed used to be left out, on the
+    grounds that "the next normal cycle will predict it" - but the normal cycle
+    only ever predicts the newest bar, so a six-hour outage left five holes for
+    a day, and the first alert after the restart could not see the signals
+    those hours would have shown.
+
+    Only the last MAX_GAP_BARS bars are considered, every cycle. The cap used to
+    trim the list instead, and the next cycle filled the older remainder anyway.
+
+    `horizon` is accepted for compatibility and no longer used.
     """
     bars = parquet.read("klines", symbol, interval)
     if bars.empty:
@@ -59,17 +67,34 @@ def find_gap_bars(
     first_recorded = min(recorded)
     delta = interval_to_timedelta(interval)
 
-    # Never reach back before the log started: those bars were not missed, they
-    # were before the system existed.
-    candidates = bars[bars["close_time"] >= first_recorded]
-    # A bar is only worth filling once its outcome could be scored.
     now = pd.Timestamp.now(tz="UTC")
-    scoreable = candidates[candidates["close_time"] + horizon * delta <= now]
+    closed = bars[bars["close_time"] <= now]
+    if len(closed) < 2:
+        return []
+    newest = closed["close_time"].iloc[-1]
+    # Never reach back before the log started: those bars were not missed, they
+    # were before the system existed. Nor past the cap.
+    window_start = max(first_recorded, newest - MAX_GAP_BARS * delta)
+    candidates = closed["close_time"].iloc[:-1]
+    candidates = candidates[candidates >= window_start]
+    return [ts for ts in candidates if ts not in recorded]
 
-    missing = [
-        ts for ts in scoreable["close_time"] if ts not in recorded
+
+def _missed_before_window(
+    store: PredictionStore, parquet: ParquetStore, symbol: str, interval: str
+) -> int:
+    """How many missed bars lie beyond the cap - reported, never filled."""
+    bars = parquet.read("klines", symbol, interval)
+    history = store.history(symbol, interval, limit=1_000_000)
+    if bars.empty or history.empty:
+        return 0
+    recorded = set(pd.to_datetime(history["bar_close_time"], utc=True))
+    delta = interval_to_timedelta(interval)
+    window_start = bars["close_time"].iloc[-1] - MAX_GAP_BARS * delta
+    old = bars["close_time"][
+        (bars["close_time"] >= min(recorded)) & (bars["close_time"] < window_start)
     ]
-    return missing
+    return int(sum(ts not in recorded for ts in old))
 
 
 def fill_gaps(
@@ -86,13 +111,16 @@ def fill_gaps(
     if not missing:
         return {"gap_bars": 0, "filled": 0, "skipped": 0}
 
-    if len(missing) > MAX_GAP_BARS:
+    if len(missing) >= MAX_GAP_BARS and (
+        older := _missed_before_window(store, parquet, symbol, interval)
+    ):
+        # Said once: after this fill the window is complete and nothing more
+        # is attempted, so the next cycle has nothing to repeat.
         logger.warning(
-            "%s %s: %d missing bars exceeds the %d-bar limit; filling only the most "
-            "recent. A gap this large should be looked at, not papered over.",
-            symbol, interval, len(missing), MAX_GAP_BARS,
+            "%s %s: %d more missing bars lie beyond the %d-bar limit and are left "
+            "empty. A gap this large should be looked at, not papered over.",
+            symbol, interval, older, MAX_GAP_BARS,
         )
-        missing = missing[-MAX_GAP_BARS:]
 
     if predictor is None:
         try:
