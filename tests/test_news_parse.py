@@ -228,3 +228,36 @@ def test_uid_prefers_the_guid_then_the_link_then_the_title():
     assert stable_uid("S", "post-1", "https://x.io/a", "T") == "S#post-1"
     assert stable_uid("S", None, "https://x.io/a", "T") == "x.io/a"
     assert stable_uid("S", None, None, "Big  News") == "S#title:big news"
+
+
+# -- review findings, 2026-10-01: one bad item cost the whole feed --------------
+
+
+@pytest.mark.parametrize(
+    "bad_item",
+    [
+        "<item><title>Bad link</title><link>http://[oops/x</link></item>",
+        "<item><title>Bad port</title><guid>http://a.com:99999999/x</guid></item>",
+        "<item><title>Bad date</title><link>https://a.com/2</link>"
+        "<pubDate>0001-01-01T00:00:00+05:00</pubDate></item>",
+    ],
+)
+def test_one_malformed_item_does_not_cost_the_other_headlines(bad_item):
+    """Each raised out of parse_feed - ValueError from urlsplit, OverflowError
+    from astimezone - and the poll recorded a failed fetch for a feed with one
+    odd item in it."""
+    good = "<item><title>Good one</title><link>https://a.com/1</link></item>"
+    doc = f"<rss><channel>{good}{bad_item}</channel></rss>".encode()
+    titles = [e.title for e in parse_feed(doc, source="s")]
+    assert "Good one" in titles
+    # The bad field becomes None; the headline itself is still worth keeping.
+    assert len(titles) == 2
+
+
+def test_an_unreadable_date_is_none_not_an_error():
+    assert parse_date("0001-01-01T00:00:00+05:00") is None
+
+
+def test_an_unfollowable_link_is_none_not_an_error():
+    assert safe_link("http://[oops/x") is None
+    assert safe_link("http://a.com:99999999/x") is None

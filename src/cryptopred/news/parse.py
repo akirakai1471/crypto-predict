@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import email.utils
 import html
+import logging
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from datetime import UTC, datetime
 from html.entities import name2codepoint
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
+logger = logging.getLogger(__name__)
 
 class FeedParseError(ValueError):
     """The bytes are not a readable RSS or Atom document."""
@@ -79,7 +81,15 @@ def parse_feed(data: bytes, base_url: str = "", source: str = "") -> list[Entry]
     for element in root.iter():
         if _local(element.tag) not in _ITEM_TAGS:
             continue
-        entry = _entry(element, base_url=base_url, source=source)
+        # The fields below are each read defensively; this is the backstop
+        # for whatever malformation they did not foresee. Without it a link
+        # like "http://[" in one item raised out of the loop and cost every
+        # other headline in the feed.
+        try:
+            entry = _entry(element, base_url=base_url, source=source)
+        except Exception as exc:  # noqa: BLE001 - one item must not cost the feed
+            logger.warning("%s: skipped an unreadable item (%s)", source, exc)
+            continue
         if entry is not None:
             entries.append(entry)
     return entries
@@ -128,7 +138,11 @@ def parse_date(text: str | None) -> datetime | None:
             return None
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         return None
-    return parsed.astimezone(UTC)
+    try:
+        return parsed.astimezone(UTC)
+    except (OverflowError, ValueError):
+        # "0001-01-01T00:00+05:00" is a valid string and no valid instant.
+        return None
 
 
 def normalize_url(url: str) -> str:
@@ -138,10 +152,16 @@ def normalize_url(url: str) -> str:
     re-issue its whole backlog as new), the fragment, tracking parameters and a
     trailing slash; lowercases the host. This is a key, never a link to follow.
     """
-    parts = urlsplit(url.strip())
+    try:
+        parts = urlsplit(url.strip())
+        port = parts.port
+    except ValueError:
+        # "http://[oops", a port of 99999999: not a URL anyone can follow, but
+        # still a stable string, and a key is all this is.
+        return url.strip()
     host = (parts.hostname or "").lower()
-    if parts.port and parts.port not in (80, 443):
-        host = f"{host}:{parts.port}"
+    if port and port not in (80, 443):
+        host = f"{host}:{port}"
     query = sorted(
         (k, v)
         for k, v in parse_qsl(parts.query, keep_blank_values=True)
@@ -160,8 +180,12 @@ def safe_link(raw: str | None, base_url: str = "") -> str | None:
     """
     if not raw or not raw.strip():
         return None
-    absolute = urljoin(base_url, raw.strip()) if base_url else raw.strip()
-    parts = urlsplit(absolute)
+    try:
+        absolute = urljoin(base_url, raw.strip()) if base_url else raw.strip()
+        parts = urlsplit(absolute)
+        parts.port  # noqa: B018 - raises on a port no browser would accept
+    except ValueError:
+        return None
     if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
         return None
     # Reassembled rather than returned raw: urlsplit has already dropped the
