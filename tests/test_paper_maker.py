@@ -193,3 +193,21 @@ def test_orders_from_consecutive_bars_can_fill_without_colliding(tmp_path):
     counts = trader.resolve_pending("BTCUSDT", "1h")
     assert counts["filled"] == 4
     assert len(trader.store.open_trades("BTCUSDT")) == 4
+
+
+def test_a_chased_entry_and_market_exit_pay_slippage_once(tmp_path):
+    """Both legs crossed: the slippage is in each fill price already, so the
+    cost is the taker fee per leg - as in the backtest engine's taker_fill.
+    Charging taker_fee + slippage on top paid it twice, 2 bps a trade."""
+    # The exit limit (101.5 x 1.002) is never reached on bar 2, so it crosses.
+    rows = [(100, 101, 100, 100), (100, 102, 100, 101.5), (101, 101.6, 101, 101.4),
+            (102, 102.1, 99, 100)]
+    trader, bars = _make(tmp_path, rows)
+    trader.post_limit("BTCUSDT", "1h", 1, bars.index[0], 100.0, "v1", horizon=1)
+    trader.resolve_pending("BTCUSDT", "1h")      # chased at 101.5 x 1.0002
+    trader.close_due_trades("BTCUSDT", "1h", horizon=1)
+
+    closed = trader.store.closed_trades("BTCUSDT").iloc[0]
+    assert closed["entry_price"] == pytest.approx(101.5 * 1.0002)
+    assert closed["exit_price"] == pytest.approx(101.4 * (1 - 0.0002))
+    assert closed["cost"] == pytest.approx(2 * 0.0005)
