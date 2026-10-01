@@ -73,7 +73,21 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         status = []
         for symbol in cfg.data.symbols:
             for interval in cfg.data.intervals:
-                bars = parquet.read("klines", symbol, interval)
+                # One unreadable file costs its own row, not the endpoint: a
+                # 500 here turned the scheduler light to "unknown" while the
+                # heartbeat was fine.
+                try:
+                    bars = parquet.read("klines", symbol, interval)
+                except Exception as exc:  # noqa: BLE001 - reported, not raised
+                    status.append(
+                        {
+                            "symbol": symbol,
+                            "interval": interval,
+                            "bars": None,
+                            "error": f"{type(exc).__name__}: {exc}"[:200],
+                        }
+                    )
+                    continue
                 if bars.empty:
                     status.append({"symbol": symbol, "interval": interval, "bars": 0})
                     continue
