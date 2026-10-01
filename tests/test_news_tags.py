@@ -105,3 +105,34 @@ def test_the_symbol_map_is_extensible():
 def test_the_caveat_says_unvalidated_and_that_the_model_does_not_read_news():
     assert "QUY ƯỚC — CHƯA KIỂM CHỨNG" in TAG_CAVEAT
     assert "Model không đọc tin" in TAG_CAVEAT
+
+
+# -- review findings, 2026-10-01 --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("title", "symbols"),
+    [
+        ("Bitcoin Cash jumps 12%", ()),
+        ("Bitcoin SV miners exit", ()),
+        ("Ethereum Classic hit by reorg", ()),
+        ("Bitcoin Cash lags as Bitcoin rallies", ("BTCUSDT",)),
+        ("Ethereum Classic and Ethereum diverge", ("ETHUSDT",)),
+    ],
+)
+def test_another_coin_named_after_one_is_not_that_coin(title, symbols):
+    assert tag_title(title).symbols == symbols
+
+
+@pytest.mark.parametrize(
+    ("title", "high_impact"),
+    [
+        ("Treasury Sec. Bessent speaks on dollar", False),   # a secretary
+        ("SEC sues exchange", True),
+        ("Federal Reserve holds rates steady", True),
+        ("Country moves toward banning crypto mining", True),
+        ("Bank regulator prohibits crypto custody", True),
+    ],
+)
+def test_impact_terms_reviewed_on_2026_10_01(title, high_impact):
+    assert tag_title(title).high_impact is high_impact, tag_title(title)

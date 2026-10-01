@@ -7,8 +7,13 @@ tags exist so a person can scan the feed faster and so that, once months of
 point-in-time headlines exist, their value can be measured instead of assumed.
 
 Matching is on whole words and ignores case: "Ethan" is not ETH, "SECurity" is
-not the SEC, "Tether" is not ether. One term is case-sensitive: "fed" is the
-past tense of "feed", so only "Fed" and "FED" count as the Federal Reserve.
+not the SEC, "Tether" is not ether. A few terms are case-sensitive: "fed" is the
+past tense of "feed", so only "Fed" and "FED" count as the Federal Reserve, and
+only "SEC" is the regulator - "Treasury Sec. Bessent" is a secretary.
+
+A coin's name inside another coin's name does not tag it: "Bitcoin Cash" is not
+BTC, and "Ethereum Classic" is not ETH. Those phrases are removed before the
+symbol is matched, so "Bitcoin Cash lags as Bitcoin rallies" still tags BTC.
 
 Tags are computed when a headline is read, never stored. Editing a keyword list
 then re-tags the whole history under one definition, instead of leaving rows
@@ -29,10 +34,16 @@ SYMBOL_KEYWORDS: dict[str, tuple[str, ...]] = {
     "ETHUSDT": ("ethereum", "ether", "eth", "ethusdt"),
 }
 
+# Other coins whose names contain one of the words above.
+SYMBOL_EXCLUSIONS: dict[str, tuple[str, ...]] = {
+    "BTCUSDT": ("bitcoin cash", "bitcoin sv", "bitcoin gold"),
+    "ETHUSDT": ("ethereum classic", "ethereum pow"),
+}
+
 HIGH_IMPACT_KEYWORDS: tuple[str, ...] = (
-    # regulators and courts
-    "sec", "cftc", "lawsuit", "lawsuits", "sues", "sued",
-    "ban", "bans", "banned",
+    # regulators and courts ("SEC" is case-sensitive, below)
+    "cftc", "lawsuit", "lawsuits", "sues", "sued",
+    "ban", "bans", "banned", "banning", "prohibit*",
     "approval", "approve", "approves", "approved",
     "etf", "etfs",
     # losses
@@ -40,13 +51,13 @@ HIGH_IMPACT_KEYWORDS: tuple[str, ...] = (
     "exploit", "exploits", "exploited",
     "liquidat*", "bankrupt*", "insolven*",
     # monetary policy
-    "fomc", "rate cut", "rate cuts", "rate hike", "rate hikes",
+    "fomc", "federal reserve", "rate cut", "rate cuts", "rate hike", "rate hikes",
     # market structure
     "halving", "delist*",
 )
 
-# Terms whose lowercase form is an ordinary English word.
-CASE_SENSITIVE_KEYWORDS: tuple[str, ...] = ("Fed", "FED")
+# Terms whose other spellings are ordinary words: "fed", "Sec." for secretary.
+CASE_SENSITIVE_KEYWORDS: tuple[str, ...] = ("Fed", "FED", "SEC")
 
 # Shown next to every tag, in every place a person can see one.
 TAG_CAVEAT = (
@@ -98,10 +109,16 @@ class Tagger:
         symbol_keywords: Mapping[str, Iterable[str]] = SYMBOL_KEYWORDS,
         impact_keywords: Iterable[str] = HIGH_IMPACT_KEYWORDS,
         case_sensitive_keywords: Iterable[str] = CASE_SENSITIVE_KEYWORDS,
+        symbol_exclusions: Mapping[str, Iterable[str]] = SYMBOL_EXCLUSIONS,
     ) -> None:
         self._symbols = {
             symbol: pattern
             for symbol, words in symbol_keywords.items()
+            if (pattern := _compile(words, re.IGNORECASE)) is not None
+        }
+        self._exclusions = {
+            symbol: pattern
+            for symbol, words in symbol_exclusions.items()
             if (pattern := _compile(words, re.IGNORECASE)) is not None
         }
         self._impact = [
@@ -117,8 +134,14 @@ class Tagger:
     def symbols(self) -> tuple[str, ...]:
         return tuple(self._symbols)
 
+    def _names(self, symbol: str, title: str) -> bool:
+        excluded = self._exclusions.get(symbol)
+        if excluded is not None:
+            title = excluded.sub(" ", title)
+        return self._symbols[symbol].search(title) is not None
+
     def tag(self, title: str) -> Tags:
-        symbols = tuple(s for s, pattern in self._symbols.items() if pattern.search(title))
+        symbols = tuple(s for s in self._symbols if self._names(s, title))
         hits = sorted(
             (m.start(), m.group(0)) for pattern in self._impact for m in pattern.finditer(title)
         )

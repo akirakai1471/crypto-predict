@@ -199,3 +199,36 @@ def test_the_news_jobs_routine_log_lines_are_dropped_and_the_cycles_are_not(cfg)
         isinstance(f, QuietNewsRuns)
         for f in logging.getLogger("apscheduler.executors.default").filters
     )
+
+
+def test_a_store_failure_does_not_turn_the_next_poll_into_a_304(tmp_path):
+    """The validators were remembered as the body arrived. A store that then
+    failed - "database is locked" - made the next poll a 304, and the
+    headlines it never stored were not offered again until the publisher
+    changed the feed."""
+    feeds = [FeedConfig(name="Rss", url="https://rss.example.com/feed")]
+
+    def handler(request):
+        if request.headers.get("If-None-Match") == '"v1"':
+            return httpx.Response(304)
+        return httpx.Response(200, content=RSS, headers={"ETag": '"v1"'})
+
+    fetcher = FeedFetcher(feeds, transport=httpx.MockTransport(handler))
+    store = NewsStore(tmp_path / "news.db")
+    real_add = store.add
+    calls = {"n": 0}
+
+    def locked_once(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("database is locked")
+        return real_add(*args, **kwargs)
+
+    store.add = locked_once
+    with pytest.raises(RuntimeError):
+        poll_once(fetcher, store)
+    second = poll_once(fetcher, store)
+    assert second.results[0].status == "ok"
+    assert len(second.inserted) > 0
+    # Stored now, so the poll after that may be conditional.
+    assert poll_once(fetcher, store).results[0].status == "not_modified"
