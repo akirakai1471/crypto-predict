@@ -49,13 +49,16 @@ timeout /t 12 /nobreak >nul
 REM Verify rather than assume. A window that opened and died leaves no trace
 REM otherwise, and the failure would only surface days later as an empty log.
 REM Each piece is counted on its own: one count for both said OK while the
-REM scheduler - the piece that matters - had died at start-up.
+REM scheduler - the piece that matters - had died at start-up. .Where() rather
+REM than a pipe: the pipe sits inside cmd's quotes here, where ^ is not an
+REM escape, so it reached PowerShell as a stray argument to Get-CimInstance.
+REM With no pipe there is nothing for cmd to escape.
 set SCHED=0
 set DASH=0
 for /f %%N in ('powershell -NoProfile -Command ^
-  "(Get-CimInstance Win32_Process -Filter \"Name like 'python%%'\" ^| Where-Object { $_.CommandLine -like '*cryptopred.serve.cli schedule*' }).Count"') do set SCHED=%%N
+  "@((Get-CimInstance Win32_Process -Filter \"Name like 'python%%'\").Where({ $_.CommandLine -like '*cryptopred.serve.cli schedule*' })).Count"') do set SCHED=%%N
 for /f %%N in ('powershell -NoProfile -Command ^
-  "(Get-CimInstance Win32_Process -Filter \"Name like 'python%%'\" ^| Where-Object { $_.CommandLine -like '*uvicorn cryptopred*' }).Count"') do set DASH=%%N
+  "@((Get-CimInstance Win32_Process -Filter \"Name like 'python%%'\").Where({ $_.CommandLine -like '*uvicorn cryptopred*' })).Count"') do set DASH=%%N
 
 echo.
 if "%SCHED%"=="0" echo ERROR: the scheduler is not running.

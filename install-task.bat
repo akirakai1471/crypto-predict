@@ -62,14 +62,32 @@ if errorlevel 2 (
 )
 
 REM pythonw.exe runs without a console window, so a task that starts at logon
-REM does not put two black windows on screen every morning.
+REM does not put two black windows on screen every morning. With no console
+REM there is nowhere for output to go: the scheduler logs to
+REM data\logs\scheduler.log, and uvicorn is told not to probe the console for
+REM colour support, which raises when there is no console to probe.
 schtasks /Create /TN "%TASK_SCHED%" /SC ONLOGON /RL LIMITED /F ^
   /TR "\"%CD%\.venv\Scripts\pythonw.exe\" -m cryptopred.serve.cli schedule --interval 1h --minute 2"
 if errorlevel 1 goto failed
 
 schtasks /Create /TN "%TASK_DASH%" /SC ONLOGON /RL LIMITED /F ^
-  /TR "\"%CD%\.venv\Scripts\pythonw.exe\" -m uvicorn cryptopred.serve.api:app --host 127.0.0.1 --port 8077"
+  /TR "\"%CD%\.venv\Scripts\pythonw.exe\" -m uvicorn cryptopred.serve.api:app --host 127.0.0.1 --port 8077 --no-use-colors"
 if errorlevel 1 goto failed
+
+REM schtasks /Create cannot set a task's settings, and its defaults stop a task
+REM that has run for 72 hours and stop it when a laptop goes onto battery. A
+REM scheduler meant to run for weeks would die on day three - and the dashboard,
+REM which carries the watchdog, with it. This lifts both for the two long tasks.
+powershell -NoProfile -Command "try { $s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); foreach ($t in '%TASK_SCHED%', '%TASK_DASH%') { Set-ScheduledTask -TaskName $t -Settings $s -ErrorAction Stop | Out-Null } } catch { Write-Host $_; exit 1 }"
+if errorlevel 1 (
+    echo.
+    echo WARNING: could not change the task settings. The tasks still work, but
+    echo Windows will stop them after 3 days and when on battery. To fix by hand:
+    echo Task Scheduler, open each cryptopred task, Settings tab, untick
+    echo "Stop the task if it runs longer than", and on the Conditions tab untick
+    echo "Start the task only if the computer is on AC power".
+    echo.
+)
 
 REM Monthly, not at logon. Evaluation takes ~25 minutes of CPU, and running it
 REM every time the machine boots would spend that for nothing - the answer
