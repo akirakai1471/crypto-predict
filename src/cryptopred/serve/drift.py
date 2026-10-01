@@ -21,14 +21,22 @@ from typing import Any
 
 import pandas as pd
 
-# Same tolerance as the save gate in models/train.py. A model firing at more
-# than twice or less than half its planned rate is a different strategy from the
-# one that was backtested, whichever direction it drifted.
-DRIFT_TOLERANCE = 2.0
+# How far a rate may stray before it counts as drift, measured rather than
+# assumed. Signals come in runs, so a few weeks' rate swings far more than
+# independent bars would: on out-of-fold margins from twenty symbols, with each
+# fold's cutoff set at its own 8%, a model working exactly as built strayed past
+# 2x in 43% of 500-bar windows, past 4x in 15% and past 8x in 5% (2026-10-01,
+# docs/findings.md). The old 2.0 called drift on a sound model nearly half the
+# time, and was read as evidence. 8.0 is the measured 95th percentile.
+DRIFT_TOLERANCE = 8.0
 
-# Below this many rows the observed rate is noise. At an 8% target, 60 bars is
-# fewer than five expected signals, and seeing none of those is unremarkable.
-MIN_ROWS_TO_JUDGE = 60
+# A rate is judged over this many bars (three weeks of hours) and no fewer.
+MIN_ROWS_TO_JUDGE = 500
+
+# Silence is judged sooner, because it is the failure this module exists for -
+# but not from the first few bars: a sound model fires on nothing in 12.5% of
+# 200-bar windows, 5.3% of 336-bar ones and 2.3% of 500-bar ones.
+MIN_ROWS_FOR_SILENCE = 336
 
 
 def coverage_drift(
@@ -65,43 +73,47 @@ def coverage_drift(
         )
     rows = rows.tail(window)
     n = len(rows)
-    if n < MIN_ROWS_TO_JUDGE:
-        return {
-            "state": "too_few",
-            "detail": (
-                f"{n} bars logged under this model; "
-                f"{MIN_ROWS_TO_JUDGE} needed before a rate means anything"
-            ),
-            "n_rows": n,
-            "target": target,
-        }
 
     margin = (rows["prob_up"] - rows["prob_down"]).abs()
     # A bar whose most likely class is FLAT is never traded, however wide the gap
     # between the two directional probabilities happens to be.
     directional = rows[["prob_down", "prob_flat", "prob_up"]].to_numpy().argmax(axis=1) != 1
-    actual = float(((margin >= cutoff) & directional).mean())
+    actual = float(((margin >= cutoff) & directional).mean()) if n else 0.0
 
-    if actual <= 0:
+    if actual <= 0 and n >= MIN_ROWS_FOR_SILENCE:
         return {
             "state": "silent",
             "detail": (
                 f"0 of {n} bars cleared the cutoff {cutoff:.4f}. The rule was set "
-                f"to fire on {target:.0%}. The model is not trading at all"
+                f"to fire on {target:.0%}. The model is not trading at all "
+                "(a sound model does this in about 1 window in 20 this long)"
             ),
             "n_rows": n,
             "actual": 0.0,
             "target": target,
             "ratio": float("inf"),
         }
+    if n < MIN_ROWS_TO_JUDGE:
+        return {
+            "state": "too_few",
+            "detail": (
+                f"{n} bars logged under this model, firing on {actual:.1%} so far; "
+                f"{MIN_ROWS_TO_JUDGE} needed before a rate means anything - signals "
+                "come in runs, and a few weeks of them swing widely"
+            ),
+            "n_rows": n,
+            "actual": actual,
+            "target": target,
+        }
 
-    ratio = max(actual / target, target / actual)
+    ratio = max(actual / target, target / actual) if actual > 0 else float("inf")
     state = "ok" if ratio <= DRIFT_TOLERANCE else "drifted"
     return {
         "state": state,
         "detail": (
             f"fires on {actual:.1%} of the last {n} bars against a {target:.0%} "
-            f"target ({ratio:.1f}x)"
+            f"target ({ratio:.1f}x; a sound model strays past 2x in 4 windows of 10 "
+            f"and past {DRIFT_TOLERANCE:.0f}x in 1 of 20)"
         ),
         "n_rows": n,
         "actual": actual,

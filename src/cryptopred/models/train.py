@@ -381,17 +381,18 @@ def walk_forward_evaluate(
     }
 
 
-# A saved model whose signal rate differs from the evaluated one by more than
-# this factor is not the model that was evaluated, whatever the metrics said.
-# How far the saved model's signal rate may drift from the planned one before it
-# is refused. Sampling noise on a 1,000-bar check at 8% coverage is about ±1.3x
-# at two sigma, so 2.0 sits clearly outside noise while still catching the real
-# failures: a 2.5x shortfall means the strategy trades less than half as often as
-# the backtest it was approved on, over different bars.
+# How far the saved model's signal rate on the verify block may sit from the
+# planned one before it is refused. Measured, not assumed (2026-10-01,
+# docs/findings.md): with a cutoff set on 2,000 out-of-fold bars and checked on
+# the next 1,000, a model working exactly as built strayed past 2x 41% of the
+# time, past 4x 11% and past 6.2x 5%. Signals come in runs, so a 1,000-bar rate
+# is far noisier than the "+-1.3x at two sigma" this once assumed from
+# independent bars, and 2.0 refused sound models four times in ten.
 #
-# Was 3.0, which passed a model that fired on 3.2% of unseen bars against an 8%
-# target. Loosening this is how a broken rule ships.
-COVERAGE_TOLERANCE = 2.0
+# 6.0 is the measured 95th percentile. It still refuses the failures this
+# check exists for - a final model firing on nothing (an infinite ratio), or on
+# half of all bars - and no longer refuses a model for the noise in its own rate.
+COVERAGE_TOLERANCE = 6.0
 
 # Bars withheld from the final fit so the trading rule can be set on data the
 # deployed model has never seen. Roughly four months of hourly bars: enough for a

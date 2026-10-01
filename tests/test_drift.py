@@ -35,16 +35,16 @@ def test_a_model_that_never_fires_is_reported_silent():
 
 
 def test_a_model_firing_at_its_target_is_ok():
-    margins = np.concatenate([np.full(8, 0.20), np.full(92, 0.01)])
+    margins = np.concatenate([np.full(40, 0.20), np.full(460, 0.01)])
     drift = coverage_drift(_history(margins), "v1", cutoff=0.10, target=0.08)
     assert drift["state"] == "ok"
     assert drift["actual"] == 0.08
 
 
 def test_firing_far_too_often_also_counts_as_drift():
-    """Drift is two-sided. A rule firing five times too often is not the rule
-    that was backtested either, and it burns five times the fees."""
-    margins = np.concatenate([np.full(40, 0.20), np.full(60, 0.01)])
+    """Drift is two-sided. A rule firing nine times too often is not the rule
+    that was backtested either, and it burns nine times the fees."""
+    margins = np.concatenate([np.full(350, 0.20), np.full(150, 0.01)])
     drift = coverage_drift(_history(margins), "v1", cutoff=0.10, target=0.08)
     assert drift["state"] == "drifted"
     assert drift["ratio"] > DRIFT_TOLERANCE
@@ -53,7 +53,7 @@ def test_firing_far_too_often_also_counts_as_drift():
 def test_a_flat_argmax_never_counts_as_a_signal():
     """A wide gap between UP and DOWN is not a trade if FLAT is likeliest."""
     drift = coverage_drift(
-        _history([0.20] * 100, flat=True), "v1", cutoff=0.10, target=0.08
+        _history([0.20] * 400, flat=True), "v1", cutoff=0.10, target=0.08
     )
     assert drift["state"] == "silent"
 
@@ -62,9 +62,9 @@ def test_other_versions_rows_are_not_counted():
     """An older model's probabilities came from a different calibrator. Judging
     today's cutoff against them compares two unrelated scales."""
     old = _history([0.20] * 300, version="v0")
-    new = _history([0.01] * 100, version="v1")
+    new = _history([0.01] * 400, version="v1")
     drift = coverage_drift(pd.concat([old, new]), "v1", cutoff=0.10, target=0.08)
-    assert drift["n_rows"] == 100
+    assert drift["n_rows"] == 400
     assert drift["state"] == "silent"
 
 
@@ -97,7 +97,7 @@ def test_the_window_is_the_newest_bars_even_when_the_log_arrives_newest_first(tm
 
     store = PredictionStore(tmp_path / "predictions.db")
     start = pd.Timestamp("2026-09-01T00:00Z")
-    for i in range(600):
+    for i in range(900):
         fires = i < 500  # fired for 500 bars, then went quiet
         proba = (0.1, 0.3, 0.6) if fires else (0.33, 0.33, 0.34)
         store.record_prediction(
@@ -111,6 +111,26 @@ def test_the_window_is_the_newest_bars_even_when_the_log_arrives_newest_first(tm
         )
 
     history = store.history("BTCUSDT", "1h", limit=100_000)
-    drift = coverage_drift(history, "v1", cutoff=0.10, target=0.08, window=100)
+    drift = coverage_drift(history, "v1", cutoff=0.10, target=0.08, window=400)
     assert drift["state"] == "silent"
-    assert "0 of 100" in drift["detail"]
+    assert "0 of 400" in drift["detail"]
+
+
+
+# -- review findings, 2026-10-01: drift measured against a sound model's noise ------
+
+
+def test_a_rate_a_sound_model_often_shows_is_not_called_drift():
+    """3.2% against an 8% target over 500 bars is 2.5x. A model working as
+    built strays past 2x in 43% of 500-bar windows; this used to be "drifted"
+    and was read as evidence that something broke."""
+    margins = np.concatenate([np.full(16, 0.20), np.full(484, 0.01)])
+    drift = coverage_drift(_history(margins), "v1", cutoff=0.10, target=0.08)
+    assert drift["state"] == "ok"
+    assert "4 windows of 10" in drift["detail"]
+
+
+def test_silence_over_a_few_days_is_not_yet_an_alarm():
+    """A sound model fires on nothing in one 200-bar window in eight."""
+    drift = coverage_drift(_history([0.01] * 200), "v1", cutoff=0.10, target=0.08)
+    assert drift["state"] == "too_few"
