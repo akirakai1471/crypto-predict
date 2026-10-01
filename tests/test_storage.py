@@ -107,3 +107,12 @@ def test_a_write_killed_half_way_leaves_the_old_file_readable(tmp_path, monkeypa
     assert len(store.read("klines", "BTCUSDT", "1h")) == 3
     leftovers = [p.name for p in (tmp_path / "klines" / "BTCUSDT" / "1h").iterdir()]
     assert leftovers == ["2024.parquet"]
+
+
+def test_tail_summary_counts_every_year_but_reads_only_the_newest(tmp_path):
+    store = ParquetStore(tmp_path)
+    store.write("klines", "BTCUSDT", "1h", _frame("2023-12-31 20:00", 10))  # spans two years
+    total, newest = store.tail_summary("klines", "BTCUSDT", "1h")
+    assert total == 10
+    assert newest.index.min().year == 2024 and len(newest) == 6
+    assert store.tail_summary("klines", "ETHUSDT", "1h")[0] == 0

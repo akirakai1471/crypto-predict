@@ -68,6 +68,24 @@ class ParquetStore:
             existing = pd.read_parquet(path) if path.exists() else pd.DataFrame()
             _write_parquet(merge_frames(existing, chunk), path)
 
+    def tail_summary(
+        self, kind: str, symbol: str, interval: str
+    ) -> tuple[int, pd.DataFrame]:
+        """(total rows, newest year's rows) without reading every year.
+
+        Row counts come from each file's parquet footer. The dashboard's health
+        check asks this every minute, and reading a multi-year 1m store in full
+        to report one timestamp cost seconds per symbol.
+        """
+        import pyarrow.parquet as pq
+
+        directory = self._dir(kind, symbol, interval)
+        files = sorted(directory.glob("*.parquet")) if directory.exists() else []
+        if not files:
+            return 0, pd.DataFrame()
+        total = sum(pq.ParquetFile(f).metadata.num_rows for f in files)
+        return total, pd.read_parquet(files[-1])
+
     def last_open_time(self, kind: str, symbol: str, interval: str) -> pd.Timestamp | None:
         """Newest stored index value, used to resume an interrupted backfill."""
         directory = self._dir(kind, symbol, interval)

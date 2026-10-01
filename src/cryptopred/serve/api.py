@@ -79,7 +79,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 # 500 here turned the scheduler light to "unknown" while the
                 # heartbeat was fine.
                 try:
-                    bars = parquet.read("klines", symbol, interval)
+                    n_bars, bars = parquet.tail_summary("klines", symbol, interval)
                 except Exception as exc:  # noqa: BLE001 - reported, not raised
                     status.append(
                         {
@@ -107,7 +107,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                     {
                         "symbol": symbol,
                         "interval": interval,
-                        "bars": int(len(bars)),
+                        "bars": int(n_bars),
                         "last_bar": last.isoformat(),
                         "last_close": last_close.isoformat(),
                         "minutes_behind": round(age, 1),
