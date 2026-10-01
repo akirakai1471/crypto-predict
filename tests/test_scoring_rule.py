@@ -98,3 +98,24 @@ def test_a_genuinely_flat_prediction_is_right_when_nothing_moves(tmp_path):
     )
     score_pending(store, parquet, "BTCUSDT", "1h", horizon=4, band_k=0.5)
     assert store.history("BTCUSDT", "1h", limit=5).iloc[0]["is_correct"] == 1
+
+
+def test_an_outcome_across_a_hole_in_the_bars_is_not_scored(tmp_path):
+    """Training labels give no label where `horizon` rows ahead is not
+    `horizon` bars ahead in time; live scoring follows the same rule."""
+    _, _, bars = _env(tmp_path, up_move=True)
+    holed = bars.drop(bars.index[20:30])  # ten hours missing
+    parquet = ParquetStore(tmp_path / "holed")
+    parquet.write("klines", "BTCUSDT", "1h", holed)
+    store = PredictionStore(tmp_path / "holed.db")
+    # Bar 18: four rows ahead is bar 32, fourteen hours later. Bars 15 and 35
+    # have clean four-hour windows.
+    for i in (15, 18, 35):
+        store.record_prediction(
+            symbol="BTCUSDT", interval="1h",
+            bar_close_time=bars["close_time"].iloc[i],
+            proba=(0.1, 0.2, 0.7), signal=1, close_price=100.0, model_version="v1",
+        )
+    assert score_pending(store, parquet, "BTCUSDT", "1h", horizon=4) == 2
+    left = pd.to_datetime(store.unscored("BTCUSDT", "1h")["bar_close_time"], utc=True)
+    assert list(left) == [bars["close_time"].iloc[18]]

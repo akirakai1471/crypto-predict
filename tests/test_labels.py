@@ -79,3 +79,21 @@ def test_columns_present():
     labels = make_labels(bars, horizon=4, atr_period=14, band_k=0.5)
     assert list(labels.columns) == ["forward_return", "band", "label"]
     assert labels.index.equals(bars.index)
+
+
+def test_a_label_does_not_reach_across_a_hole_in_the_data():
+    """Six symbols' archives miss days in 2022. Labels looked ahead by rows, so
+    beside a hole a "24-bar" label measured a move of up to 96 hours."""
+    from cryptopred.labels.barrier import make_labels, make_triple_barrier_labels
+
+    bars = make_ohlcv(n=300, seed=3)
+    holed = bars.drop(bars.index[150:200])  # fifty hours missing
+    labels = make_labels(holed, horizon=24)
+    before = holed.index[holed.index < bars.index[150]]
+    across = before[-24:]   # their 24th row ahead lies past the hole
+    clear = before[-60:-24]
+    assert labels.loc[across, "label"].isna().all()
+    assert labels.loc[clear, "label"].notna().all()
+    assert make_triple_barrier_labels(holed, horizon=24).loc[across, "label"].isna().all()
+    # Unbroken data labels exactly as before.
+    assert make_labels(bars, horizon=24)["label"].iloc[:-24].notna().sum() >= 250

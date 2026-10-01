@@ -55,6 +55,7 @@ def score_pending(
     now = now or pd.Timestamp.now(tz="UTC")
     band = (band_k * atr(bars, atr_period) / bars["close"]).rename("band")
     closes = bars["close"]
+    step = pd.Series(bars.index).diff().median()
 
     scored = 0
     for _, row in pending.iterrows():
@@ -69,6 +70,11 @@ def score_pending(
         target = position + horizon
         if target >= len(bars):
             continue  # the future this prediction referred to has not happened yet
+        # The same rule as the training labels (labels.barrier.spans_a_gap):
+        # `horizon` rows ahead must also be `horizon` bars ahead in time, or the
+        # outcome describes a longer move than the one predicted. Left unscored.
+        if bars.index[target] - bars.index[position] != horizon * step:
+            continue
 
         entry_close = float(closes.iloc[position])
         exit_close = float(closes.iloc[target])
